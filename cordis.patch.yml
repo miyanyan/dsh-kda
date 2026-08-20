@@ -1,0 +1,4 @@
+# Mount the Host tool and make this package discoverable as a Web Client plugin.
+- insert:
+    - id: kda
+      name: dsh-kda

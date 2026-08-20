@@ -1,0 +1,7 @@
+node_modules/
+lib/
+coverage/
+*.tgz
+__pycache__/
+*.pyc
+.dsh-kda/
