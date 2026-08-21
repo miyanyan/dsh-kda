@@ -1,4 +1,5 @@
-# Mount the Host tool and make this package discoverable as a Web Client plugin.
+# Mount the Host tool and its global KDA skill registration. The package is also
+# discovered as a Web Client plugin through package.json.
 - insert:
     - id: kda
       name: dsh-kda

@@ -9,6 +9,9 @@
   },
   "include": [
     "src/index.ts",
+    "src/history.ts",
+    "src/native-trajectory.ts",
+    "src/ncu.ts",
     "src/runner.ts",
     "src/types.ts"
   ]
