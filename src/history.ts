@@ -1,31 +1,23 @@
 import type { KdaCandidateSummary, KdaDecision, KdaEvaluationResult } from './types.js'
 
-interface LegacyResult {
-  schemaVersion: 1
-  runId: string
-  task: string
-  candidate: string
-  parentCandidate?: string
-  baselineMetric?: number
-  candidateMetric?: number
-  metricUnit?: string
-  improvementPercent?: number
-  decision: KdaDecision
-}
-
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
 
 function isDecision(value: unknown): value is KdaDecision {
-  return value === 'promote' || value === 'revise' || value === 'reject'
+  return value === 'baseline' || value === 'promote' || value === 'revise' || value === 'reject'
 }
 
-function parseResult(value: unknown): KdaEvaluationResult | LegacyResult | undefined {
-  if (!isObject(value) || (value.schemaVersion !== 1 && value.schemaVersion !== 2)) return undefined
+function parseResult(value: unknown): KdaEvaluationResult | undefined {
+  if (!isObject(value) || value.schemaVersion !== 1) return undefined
   if (typeof value.runId !== 'string' || typeof value.task !== 'string' || typeof value.candidate !== 'string') return undefined
+  if (value.candidateRole !== 'baseline' && value.candidateRole !== 'experiment') return undefined
+  if (typeof value.evaluationId !== 'string' || typeof value.iteration !== 'number') return undefined
+  if (typeof value.hypothesis !== 'string' || typeof value.benchmarkContext !== 'string' || typeof value.metricUnit !== 'string') return undefined
+  if (typeof value.lowerIsBetter !== 'boolean' || typeof value.minimumImprovementPercent !== 'number') return undefined
+  if (!isObject(value.mechanismAssessment) || typeof value.profileStatus !== 'string') return undefined
   if (!isDecision(value.decision)) return undefined
-  return value as unknown as KdaEvaluationResult | LegacyResult
+  return value as unknown as KdaEvaluationResult
 }
 
 function jsonTexts(value: unknown): string[] {
@@ -48,9 +40,9 @@ function jsonTexts(value: unknown): string[] {
   return texts
 }
 
-function resultsFromEvent(event: unknown): Array<KdaEvaluationResult | LegacyResult> {
+function resultsFromEvent(event: unknown): KdaEvaluationResult[] {
   if (!isObject(event) || event.type !== 'tool/result' || !isObject(event.data)) return []
-  const results: Array<KdaEvaluationResult | LegacyResult> = []
+  const results: KdaEvaluationResult[] = []
   const meta = parseResult(event.data.meta)
   if (meta !== undefined) results.push(meta)
   for (const text of jsonTexts(event.data.message)) {
@@ -64,35 +56,31 @@ function resultsFromEvent(event: unknown): Array<KdaEvaluationResult | LegacyRes
   return results
 }
 
-function summary(result: KdaEvaluationResult | LegacyResult, fallbackIteration: number): KdaCandidateSummary {
-  if (result.schemaVersion === 2) {
-    return {
-      evaluationId: result.evaluationId,
-      candidate: result.candidate,
-      ...(result.parentCandidate !== undefined ? { parentCandidate: result.parentCandidate } : {}),
-      iteration: result.iteration,
-      hypothesis: result.hypothesis,
-      ...(result.changeSummary !== undefined ? { changeSummary: result.changeSummary } : {}),
-      ...(result.sourceRevision !== undefined ? { sourceRevision: result.sourceRevision } : {}),
-      ...(result.baselineMetric !== undefined ? { baselineMetric: result.baselineMetric } : {}),
-      ...(result.candidateMetric !== undefined ? { candidateMetric: result.candidateMetric } : {}),
-      ...(result.metricUnit !== undefined ? { metricUnit: result.metricUnit } : {}),
-      ...(result.improvementPercent !== undefined ? { improvementPercent: result.improvementPercent } : {}),
-      decision: result.decision,
-      ...(result.profileAnalysis !== undefined ? { profileBottleneck: result.profileAnalysis.bottleneck } : {}),
-    }
-  }
+function summary(result: KdaEvaluationResult): KdaCandidateSummary {
   return {
-    evaluationId: result.runId,
+    evaluationId: result.evaluationId,
     candidate: result.candidate,
+    candidateRole: result.candidateRole,
     ...(result.parentCandidate !== undefined ? { parentCandidate: result.parentCandidate } : {}),
-    iteration: fallbackIteration,
-    hypothesis: 'legacy evaluation (no hypothesis recorded)',
+    iteration: result.iteration,
+    hypothesis: result.hypothesis,
+    ...(result.changeSummary !== undefined ? { changeSummary: result.changeSummary } : {}),
+    ...(result.sourceRevision !== undefined ? { sourceRevision: result.sourceRevision } : {}),
     ...(result.baselineMetric !== undefined ? { baselineMetric: result.baselineMetric } : {}),
     ...(result.candidateMetric !== undefined ? { candidateMetric: result.candidateMetric } : {}),
-    ...(result.metricUnit !== undefined ? { metricUnit: result.metricUnit } : {}),
+    metricUnit: result.metricUnit,
     ...(result.improvementPercent !== undefined ? { improvementPercent: result.improvementPercent } : {}),
+    lowerIsBetter: result.lowerIsBetter,
+    minimumImprovementPercent: result.minimumImprovementPercent,
     decision: result.decision,
+    benchmarkContext: result.benchmarkContext,
+    ...(result.profileContext !== undefined ? { profileContext: result.profileContext } : {}),
+    profileStatus: result.profileStatus,
+    mechanismVerdict: result.mechanismAssessment.verdict,
+    ...(result.profileAnalysis !== undefined ? {
+      profileBottleneck: result.profileAnalysis.bottleneck,
+      profileAnalysis: result.profileAnalysis,
+    } : {}),
   }
 }
 
@@ -100,23 +88,17 @@ function summary(result: KdaEvaluationResult | LegacyResult, fallbackIteration: 
 export function collectCandidateHistory(
   events: readonly unknown[],
   optimizationRunId: string,
-  task: string,
 ): KdaCandidateSummary[] {
   const history: KdaCandidateSummary[] = []
   const evaluations = new Set<string>()
   for (const event of events) {
     for (const result of resultsFromEvent(event)) {
-      const belongs = result.schemaVersion === 2
-        ? result.runId === optimizationRunId
-        : optimizationRunId === task && result.task === task
-      if (!belongs) continue
-      const candidate = summary(result, history.length + 1)
-      if (evaluations.has(candidate.evaluationId)) continue
-      evaluations.add(candidate.evaluationId)
-      history.push(candidate)
+      if (result.runId !== optimizationRunId || evaluations.has(result.evaluationId)) continue
+      evaluations.add(result.evaluationId)
+      history.push(summary(result))
     }
   }
-  return history
+  return history.sort((left, right) => left.iteration - right.iteration)
 }
 
 /** Reject ambiguous lineage before executing commands. */

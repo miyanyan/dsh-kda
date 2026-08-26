@@ -30,6 +30,13 @@ function eventArguments(event: KdaTrajectoryEvent): Record<string, unknown> {
       return { stage: event.result.stage, candidate: event.candidate }
     case 'kda/profile-diagnosed':
       return { candidate: event.candidate, metricCount: event.analysis.metricCount }
+    case 'kda/mechanism-assessed':
+      return {
+        candidate: event.candidate,
+        verdict: event.assessment.verdict,
+        ...(event.assessment.expectedMetric !== undefined ? { expectedMetric: event.assessment.expectedMetric } : {}),
+        ...(event.assessment.expectedDirection !== undefined ? { expectedDirection: event.assessment.expectedDirection } : {}),
+      }
     case 'kda/decision-made':
       return { candidate: event.candidate, decision: event.decision }
     case 'kda/candidate-finished':
@@ -67,6 +74,13 @@ function eventResult(event: KdaTrajectoryEvent): Record<string, unknown> {
         evidence: event.analysis.evidence,
         recommendations: event.analysis.recommendations,
       }
+    case 'kda/mechanism-assessed':
+      return {
+        verdict: event.assessment.verdict,
+        evidence: event.assessment.evidence,
+        limitations: event.assessment.limitations,
+        ...(event.assessment.observed !== undefined ? { observed: event.assessment.observed } : {}),
+      }
     case 'kda/decision-made':
       return {
         decision: event.decision,
@@ -89,6 +103,7 @@ function eventName(event: KdaTrajectoryEvent): string {
     case 'kda/stage-started': return `kda/${event.stage}`
     case 'kda/stage-completed': return `kda/${event.result.stage}`
     case 'kda/profile-diagnosed': return 'kda/profile-diagnosed'
+    case 'kda/mechanism-assessed': return 'kda/mechanism-assessed'
     case 'kda/decision-made': return 'kda/decision'
     case 'kda/candidate-finished': return 'kda/candidate'
     case 'kda/run-finished': return 'kda/run-finished'
@@ -145,6 +160,7 @@ export class KdaNativeTrajectoryRecorder {
         }
         return
       case 'kda/profile-diagnosed':
+      case 'kda/mechanism-assessed':
       case 'kda/decision-made':
       case 'kda/run-finished':
         this.instant(eventName(event), eventArguments(event), eventResult(event), false)

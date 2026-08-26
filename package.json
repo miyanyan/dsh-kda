@@ -1,6 +1,6 @@
 {
   "name": "dsh-kda",
-  "version": "0.4.2",
+  "version": "0.0.1",
   "description": "Kernel Design Agents candidate evaluation and trajectory plugin for DeepSeek Harness",
   "type": "module",
   "main": "./lib/index.js",
@@ -18,9 +18,8 @@
   },
   "files": [
     "lib",
-    "scripts/kda_driver.py",
-    "skills/kda/SKILL.md",
-    "examples/request.json",
+    "skills/kda",
+    "skills/ncu-report-skill",
     "cordis.patch.yml",
     "README.md",
     "LICENSE"
@@ -42,7 +41,7 @@
     "build": "pnpm run clean && tsc -p tsconfig.host.json && tsc -p tsconfig.client.json && node scripts/build-client.mjs",
     "clean": "node scripts/clean.mjs",
     "typecheck": "tsc -p tsconfig.host.json --noEmit && tsc -p tsconfig.client.json --noEmit",
-    "test": "vitest run && python -m unittest discover -s tests -p test_driver.py",
+    "test": "vitest run",
     "prepare": "pnpm run build"
   },
   "keywords": [

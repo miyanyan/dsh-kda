@@ -3,6 +3,11 @@ import { useState, type CSSProperties } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { KdaView } from './kda-view.js'
+import {
+  parseKdaResult,
+  type KdaCandidateView as CandidateView,
+  type KdaResultView as ResultView,
+} from './kda-projection.js'
 
 interface KdaTextBlock {
   type: string
@@ -28,54 +33,8 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 
 type ToolCallViewProps = PropsRuntime<'tool.call.toolview'>
 
-interface StageView {
-  stage: 'correctness' | 'benchmark' | 'profile'
-  ok: boolean
-  durationMs: number
-  metric?: number
-  metricUnit?: string
-  artifact?: string
-}
-
-interface CandidateView {
-  candidate: string
-  parentCandidate?: string
-  iteration: number
-  hypothesis: string
-  candidateMetric?: number
-  metricUnit?: string
-  decision: 'promote' | 'revise' | 'reject'
-  profileBottleneck?: string
-}
-
-interface ProfileView {
-  bottleneck: string
-  confidence: 'low' | 'medium'
-  metricCount: number
-  evidence: string[]
-  recommendations: string[]
-}
-
-interface ResultView {
-  schemaVersion: 1 | 2
-  runId: string
-  iteration?: number
-  candidate: string
-  parentCandidate?: string
-  hypothesis?: string
-  changeSummary?: string
-  baselineMetric?: number
-  candidateMetric?: number
-  metricUnit?: string
-  improvementPercent?: number
-  decision: 'promote' | 'revise' | 'reject'
-  reason: string
-  stages: StageView[]
-  candidates?: CandidateView[]
-  profileAnalysis?: ProfileView
-}
-
 const color = {
+  baseline: '#2563eb',
   promote: '#16a34a',
   revise: '#d97706',
   reject: '#dc2626',
@@ -89,37 +48,9 @@ const cardStyle: CSSProperties = {
   overflow: 'hidden',
 }
 
-function resultText(block: ToolCallViewProps['block']): string | undefined {
-  if (!('kind' in block)) return undefined
-  return block.content
-    .filter(item => item.type === 'text' && typeof item.text === 'string')
-    .map(item => item.text as string)
-    .join('\n')
-}
-
-function validResult(value: unknown): ResultView | undefined {
-  if (typeof value !== 'object' || value === null) return undefined
-  const candidate = (value as { candidate?: unknown }).candidate
-  const decision = (value as { decision?: unknown }).decision
-  const reason = (value as { reason?: unknown }).reason
-  const stages = (value as { stages?: unknown }).stages
-  if (typeof candidate !== 'string' || typeof reason !== 'string' || !Array.isArray(stages)) return undefined
-  if (decision !== 'promote' && decision !== 'revise' && decision !== 'reject') return undefined
-  return value as ResultView
-}
-
 function parseResult(block: ToolCallViewProps['block']): ResultView | undefined {
-  if ('kind' in block) {
-    const fromMeta = validResult(block.meta)
-    if (fromMeta !== undefined) return fromMeta
-  }
-  const text = resultText(block)
-  if (text === undefined) return undefined
-  try {
-    return validResult(JSON.parse(text))
-  } catch {
-    return undefined
-  }
+  if (!('kind' in block)) return undefined
+  return parseKdaResult(block.meta, block.content)
 }
 
 function metric(candidate: CandidateView): string {
@@ -160,6 +91,9 @@ export function KdaToolRow({ block, inspect }: ToolCallViewProps) {
         <span style={{ color: color[result.decision] }}>●</span>
         <strong>KDA · {result.candidate}</strong>
         <span style={{ opacity: 0.72 }}>{result.decision.toUpperCase()}</span>
+        <span style={{ color: result.mechanismAssessment.verdict === 'supported' ? color.promote : color.revise, opacity: 0.78 }}>
+          mechanism {result.mechanismAssessment.verdict}
+        </span>
         {result.iteration !== undefined && <span style={{ opacity: 0.58 }}>#{result.iteration}</span>}
         {resultMetric !== undefined && <span style={{ marginLeft: 'auto', fontVariantNumeric: 'tabular-nums' }}>{resultMetric}</span>}
       </button>
@@ -188,14 +122,28 @@ export function KdaToolRow({ block, inspect }: ToolCallViewProps) {
               {' · '}{result.improvementPercent.toFixed(3)}% improvement
             </div>
           )}
-          {result.profileAnalysis !== undefined && (
+          {result.ncuReportAssessment !== undefined && (
             <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid color-mix(in srgb, currentColor 8%, transparent)' }}>
-              <strong>NCU · {result.profileAnalysis.bottleneck}</strong>
-              <span style={{ marginLeft: 7, opacity: 0.6 }}>{result.profileAnalysis.confidence} confidence · {result.profileAnalysis.metricCount} metrics</span>
-              {result.profileAnalysis.evidence.slice(0, 4).map(item => <div key={item}><code>{item}</code></div>)}
-              {result.profileAnalysis.recommendations[0] !== undefined && (
-                <div style={{ marginTop: 6, opacity: 0.8 }}>{result.profileAnalysis.recommendations[0]}</div>
+              <strong>Original NCU · {result.ncuReportAssessment.primaryDiagnosis}</strong>
+              <span style={{ marginLeft: 7, opacity: 0.6 }}>
+                {result.ncuReportAssessment.dimensions.filter(item => item.status !== 'missing-evidence').length}/6 assessed · {result.ncuReportAssessment.patterns.length} playbook matches
+              </span>
+              {result.ncuReportAssessment.recommendations[0] !== undefined && (
+                <div style={{ marginTop: 7 }}><strong>Top action:</strong> {result.ncuReportAssessment.recommendations[0].action}</div>
               )}
+              <div style={{ marginTop: 6, opacity: 0.65 }}><code>{result.ncuReportAssessment.reportPath}</code></div>
+            </div>
+          )}
+          {result.ncuReportAssessment === undefined && result.profileAnalysis !== undefined && (
+            <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid color-mix(in srgb, currentColor 8%, transparent)' }}>
+              <strong>Overview only · {result.profileAnalysis.bottleneck}</strong>
+              <span style={{ marginLeft: 7, opacity: 0.6 }}>{result.profileStatus} · {result.profileAnalysis.confidence} confidence · {result.profileAnalysis.metricCount} metrics</span>
+              <div style={{ marginTop: 6 }}>{result.profileAnalysis.diagnosis}</div>
+              {result.profileAnalysis.keyMetrics.slice(0, 6).map(item => (
+                <div key={`${item.canonicalName ?? item.name}:${item.name}`}><code>{item.name}={item.value}{item.unit === undefined ? '' : ` ${item.unit}`}</code></div>
+              ))}
+              <div style={{ marginTop: 7, opacity: 0.8 }}><strong>Next:</strong> {result.profileAnalysis.nextExperiment.action}</div>
+              <div style={{ marginTop: 7, color: color.revise }}>Not an original ncu-report-skill decision.</div>
             </div>
           )}
           {candidates.length > 0 && (

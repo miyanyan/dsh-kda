@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { KdaNativeTrajectoryRecorder } from '../src/native-trajectory.js'
 import { evaluateCandidate } from '../src/runner.js'
 import type { KdaCommandResult, KdaCommandRunner } from '../src/types.js'
+import { ncuAssessmentJson } from './fixtures.js'
 
 interface AppendedEvent {
   type: string
@@ -48,12 +49,13 @@ const request = {
   optimizationRunId: 'native-trajectory-run',
   task: 'vector-add',
   objective: 'Reduce latency without changing output.',
-  candidate: 'candidate-1',
-  hypothesis: 'Vectorized loads reduce instruction count.',
+  candidate: 'baseline',
+  candidateRole: 'baseline',
+  hypothesis: 'Measure the unmodified implementation.',
   workdir: '/workspace',
   correctnessCommand: 'validate',
   benchmarkCommand: 'benchmark',
-  baselineMetric: 10,
+  benchmarkContext: 'rtx5070ti-shape-a',
   metricUnit: 'us',
   lowerIsBetter: true,
   minimumImprovementPercent: 5,
@@ -89,11 +91,11 @@ describe('KdaNativeTrajectoryRecorder', () => {
     const candidate = starts.find(event => event.data.name === 'kda/candidate')
     expect(candidate).toBeDefined()
     const candidateId = candidate?.data.subCallId
-    for (const name of ['kda/correctness', 'kda/benchmark', 'kda/decision']) {
+    for (const name of ['kda/correctness', 'kda/benchmark', 'kda/mechanism-assessed', 'kda/decision']) {
       expect(starts.find(event => event.data.name === name)?.data.parentCallId).toBe(candidateId)
     }
     expect(starts.find(event => event.data.name === 'kda/run-started')?.data.parentCallId).toBe('call-1')
-    expect(starts.find(event => event.data.name === 'kda/run-finished')?.data.parentCallId).toBe('call-1')
+    expect(starts.find(event => event.data.name === 'kda/run-finished')).toBeUndefined()
   })
 
   it('marks a failed correctness stage as an error without adding later stages', async () => {
@@ -113,15 +115,19 @@ describe('KdaNativeTrajectoryRecorder', () => {
     await evaluateCandidate({
       ...request,
       profileCommand: 'profile',
-      profileArtifact: 'candidate-1.ncu-rep',
+      profileContext: 'rtx5070ti-ncu2026-shape-a',
+      profileArtifact: 'baseline.ncu-rep',
+      ncuReportAssessmentJson: ncuAssessmentJson(),
     }, commandRunner(), undefined, native.observe)
 
     const starts = events.filter(event => event.type === 'tool/code-dispatch-start')
     const profile = starts.find(event => event.data.name === 'kda/profile')
     const diagnosis = starts.find(event => event.data.name === 'kda/profile-diagnosed')
+    const mechanism = starts.find(event => event.data.name === 'kda/mechanism-assessed')
     expect(profile).toBeDefined()
-    expect((profile?.data.arguments as Record<string, unknown>).artifact).toBe('candidate-1.ncu-rep')
+    expect((profile?.data.arguments as Record<string, unknown>).artifact).toBe('baseline.ncu-rep')
     expect(diagnosis).toBeDefined()
+    expect(mechanism).toBeDefined()
     expect(diagnosis?.data.parentCallId).toBe(
       starts.find(event => event.data.name === 'kda/candidate')?.data.subCallId,
     )

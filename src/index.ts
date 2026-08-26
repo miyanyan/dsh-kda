@@ -13,11 +13,20 @@ import type { KdaCommandResult, KdaEvaluationRequest, KdaStageName } from './typ
 export const name = 'kda'
 export const inject = ['tools', 'shell', 'skills']
 
-const skillUrl = new URL('../skills/kda/SKILL.md', import.meta.url)
-const skillPath = fileURLToPath(skillUrl)
-const skillContent = readFileSync(skillUrl, 'utf8').replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, '')
-const skillDescription = 'Run evidence-driven CUDA, Triton, CuTe, or CUTLASS kernel optimization loops with correctness checks, repeatable benchmarks, Nsight Compute profiling, candidate lineage, and promotion decisions.'
-const skillWhenToUse = 'Use for requests to optimize or profile a GPU kernel, diagnose why a kernel is slow, analyze NCU evidence, compare kernel candidates, or continue an existing kernel optimization run, including Chinese requests such as “优化 kernel”, “看 NCU 报告”, “为什么慢”, and “继续迭代”.'
+function bundledSkill(relativePath: string): { path: string; content: string } {
+  const path = fileURLToPath(new URL(relativePath, import.meta.url))
+  return {
+    path,
+    content: readFileSync(path, 'utf8').replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, ''),
+  }
+}
+
+const ncuReportSkill = bundledSkill('../skills/ncu-report-skill/SKILL.md')
+const recorderSkill = bundledSkill('../skills/kda/SKILL.md')
+const ncuReportDescription = 'Profile CUDA kernels with Nsight Compute on B200 / sm_100. Use when the user asks to profile a kernel, analyze its performance, diagnose bottlenecks, read an ncu report, or write an optimization plan.'
+const ncuReportWhenToUse = 'Use for CUDA kernel profiling, bottleneck diagnosis, NCU report analysis, and evidence-ranked optimization planning, including “profile 一下”, “为什么慢”, “ncu 报告”, and “下一步怎么优化”.'
+const recorderDescription = 'Record a completed kernel candidate evaluation as a durable KDA semantic trajectory without replacing the original ncu-report-skill diagnosis.'
+const recorderWhenToUse = 'Use after the ncu-report-skill workflow has collected and analyzed evidence, when correctness, benchmark, profiler artifact, candidate lineage, and the final mechanism expectation should be recorded in the KDA view.'
 
 /** Deployment limits for KDA evidence commands. */
 export interface Config {
@@ -38,20 +47,28 @@ interface KdaToolArgs {
   task: string
   objective: string
   candidate: string
+  candidateRole: 'baseline' | 'experiment'
   parentCandidate?: string
   hypothesis: string
   changeSummary?: string
   sourceRevision?: string
   workdir?: string
   correctnessCommand: string
-  benchmarkCommand?: string
+  benchmarkCommand: string
   profileCommand?: string
   profileArtifact?: string
-  baselineMetric?: number
+  benchmarkContext: string
+  profileContext?: string
   metricPattern?: string
-  metricUnit?: string
+  metricUnit: string
   lowerIsBetter?: boolean
   minimumImprovementPercent?: number
+  requireProfileForPromotion?: boolean
+  requireMechanismForPromotion?: boolean
+  expectedProfileMetric?: string
+  expectedProfileDirection?: 'increase' | 'decrease' | 'stable'
+  expectedProfileMinimumChangePercent?: number
+  ncuReportAssessmentJson?: string
 }
 
 interface KdaSkillRegistry {
@@ -81,41 +98,61 @@ export function apply(ctx: Context, config: Config = {}): void {
 
   const skills = (ctx as Context & { skills: KdaSkillRegistry }).skills
   skills.register({
-    name: 'kda',
-    description: skillDescription,
-    whenToUse: skillWhenToUse,
+    name: 'ncu-report-skill',
+    description: ncuReportDescription,
+    whenToUse: ncuReportWhenToUse,
     invocation: { modelInvocable: true, userInvocable: true },
     source: 'bundled',
-    resourceBase: { kind: 'directory', path: dirname(skillPath) },
-    path: skillPath,
-    content: skillContent,
+    resourceBase: { kind: 'directory', path: dirname(ncuReportSkill.path) },
+    path: ncuReportSkill.path,
+    content: ncuReportSkill.content,
+  })
+
+  skills.register({
+    name: 'kda-recorder',
+    description: recorderDescription,
+    whenToUse: recorderWhenToUse,
+    invocation: { modelInvocable: true, userInvocable: false },
+    source: 'bundled',
+    resourceBase: { kind: 'directory', path: dirname(recorderSkill.path) },
+    path: recorderSkill.path,
+    content: recorderSkill.content,
   })
 
   ctx.tools.register(defineTool({
     name: 'kda_evaluate_candidate',
     description: 'Evaluate one implemented CUDA kernel candidate inside a persistent Kernel Design Agents optimization run. '
       + 'Reconstructs prior candidates from the durable dsh session, runs correctness first, then benchmark and optional NCU profiling, '
-      + 'and returns a replayable candidate graph with promote/revise/reject plus evidence-backed profiler guidance. '
-      + 'Reuse optimizationRunId across iterations. Benchmark stdout should contain KDA_METRIC=<number> unless metricPattern is provided.',
+      + 'and returns a replayable candidate graph with a separate performance decision and profiler-backed mechanism verdict. '
+      + 'Record the unmodified implementation first with candidateRole=baseline, then reuse optimizationRunId and parentCandidate. '
+      + 'Benchmark stdout should contain KDA_METRIC=<number> unless metricPattern is provided.',
     parameters: {
       optimizationRunId: { type: 'string', required: true, description: 'Stable id shared by every candidate in this optimization run.' },
       task: { type: 'string', required: true, description: 'Stable task name.' },
       objective: { type: 'string', required: true, description: 'Optimization objective and correctness constraints.' },
       candidate: { type: 'string', required: true, description: 'Unique candidate id.' },
+      candidateRole: { type: 'string', required: true, enum: ['baseline', 'experiment'], description: 'Use baseline for the first unmodified reference and experiment for every later candidate.' },
       parentCandidate: { type: 'string', description: 'Parent candidate id, required after the first candidate.' },
       hypothesis: { type: 'string', required: true, description: 'One testable performance hypothesis for this candidate.' },
       changeSummary: { type: 'string', description: 'Short description of the single meaningful change made for this candidate.' },
       sourceRevision: { type: 'string', description: 'Git commit, tree hash, or other source revision identifying the evaluated code.' },
       workdir: { type: 'string', description: 'Command working directory; defaults to the session workspace.' },
       correctnessCommand: { type: 'string', required: true, description: 'Command that proves candidate correctness.' },
-      benchmarkCommand: { type: 'string', description: 'Command that measures the target metric.' },
+      benchmarkCommand: { type: 'string', required: true, description: 'Command that measures the target metric.' },
       profileCommand: { type: 'string', description: 'Optional command that emits NCU CSV or KDA_NCU_METRIC=name|value|unit lines.' },
       profileArtifact: { type: 'string', description: 'Optional path to the profiler artifact, such as a .ncu-rep file.' },
-      baselineMetric: { type: 'number', description: 'Stable run baseline; later candidates inherit it from prior durable results.' },
+      benchmarkContext: { type: 'string', required: true, description: 'Stable environment/workload label for the promotion benchmark, for example win-rtx5070ti-s1024.' },
+      profileContext: { type: 'string', description: 'Stable environment/workload label used to prove that two profiler captures are comparable.' },
       metricPattern: { type: 'string', description: 'Optional JavaScript regular expression; capture group 1 or named group metric must contain the numeric metric.' },
-      metricUnit: { type: 'string', description: 'Metric unit displayed in the trajectory, for example us or TFLOP/s.' },
+      metricUnit: { type: 'string', required: true, description: 'Metric unit displayed in the trajectory, for example us or TFLOP/s.' },
       lowerIsBetter: { type: 'boolean', description: 'Whether a smaller metric is better; defaults to true.' },
       minimumImprovementPercent: { type: 'number', description: 'Required improvement over baseline; defaults to the plugin setting.' },
+      requireProfileForPromotion: { type: 'boolean', description: 'Require parseable profiler metrics before promotion.' },
+      requireMechanismForPromotion: { type: 'boolean', description: 'Require the declared metric mechanism to be supported or partially supported before promotion.' },
+      expectedProfileMetric: { type: 'string', description: 'Canonical metric key or exact NCU metric name expected to change, for example compute-throughput.' },
+      expectedProfileDirection: { type: 'string', enum: ['increase', 'decrease', 'stable'], description: 'Expected direction for expectedProfileMetric.' },
+      expectedProfileMinimumChangePercent: { type: 'number', description: 'Minimum absolute percentage change used to verify the expected profiler direction; defaults to 1.' },
+      ncuReportAssessmentJson: { type: 'string', description: 'Required with profileCommand. JSON sidecar derived from the bundled original ncu-report-skill REPORT.md, including the complete reportMarkdown text, all six dimensions, matched playbook patterns, NCU rules, primary diagnosis, and ranked recommendations. Follow skills/kda/references/ncu-assessment-schema.md exactly.' },
     },
     output: {
       schema: { type: 'string' },
@@ -133,30 +170,36 @@ export function apply(ctx: Context, config: Config = {}): void {
       const previousCandidates = collectCandidateHistory(
         exec.agent?.session.events ?? [],
         args.optimizationRunId,
-        args.task,
       )
-      const inheritedBaseline = previousCandidates.find(candidate => candidate.baselineMetric !== undefined)?.baselineMetric
       const request: KdaEvaluationRequest = {
         optimizationRunId: args.optimizationRunId,
         task: args.task,
         objective: args.objective,
         candidate: args.candidate,
+        candidateRole: args.candidateRole,
         ...(args.parentCandidate !== undefined ? { parentCandidate: args.parentCandidate } : {}),
         hypothesis: args.hypothesis,
         ...(args.changeSummary !== undefined ? { changeSummary: args.changeSummary } : {}),
         ...(args.sourceRevision !== undefined ? { sourceRevision: args.sourceRevision } : {}),
         workdir,
         correctnessCommand: args.correctnessCommand,
-        ...(args.benchmarkCommand !== undefined ? { benchmarkCommand: args.benchmarkCommand } : {}),
+        benchmarkCommand: args.benchmarkCommand,
         ...(args.profileCommand !== undefined ? { profileCommand: args.profileCommand } : {}),
         ...(args.profileArtifact !== undefined ? { profileArtifact: args.profileArtifact } : {}),
-        ...(args.baselineMetric !== undefined
-          ? { baselineMetric: args.baselineMetric }
-          : inheritedBaseline !== undefined ? { baselineMetric: inheritedBaseline } : {}),
+        benchmarkContext: args.benchmarkContext,
+        ...(args.profileContext !== undefined ? { profileContext: args.profileContext } : {}),
         ...(args.metricPattern !== undefined ? { metricPattern: args.metricPattern } : {}),
-        ...(args.metricUnit !== undefined ? { metricUnit: args.metricUnit } : {}),
+        metricUnit: args.metricUnit,
         lowerIsBetter: args.lowerIsBetter ?? true,
         minimumImprovementPercent: args.minimumImprovementPercent ?? defaultMinimumImprovementPercent,
+        ...(args.requireProfileForPromotion !== undefined ? { requireProfileForPromotion: args.requireProfileForPromotion } : {}),
+        ...(args.requireMechanismForPromotion !== undefined ? { requireMechanismForPromotion: args.requireMechanismForPromotion } : {}),
+        ...(args.expectedProfileMetric !== undefined ? { expectedProfileMetric: args.expectedProfileMetric } : {}),
+        ...(args.expectedProfileDirection !== undefined ? { expectedProfileDirection: args.expectedProfileDirection } : {}),
+        ...(args.expectedProfileMinimumChangePercent !== undefined
+          ? { expectedProfileMinimumChangePercent: args.expectedProfileMinimumChangePercent }
+          : {}),
+        ...(args.ncuReportAssessmentJson !== undefined ? { ncuReportAssessmentJson: args.ncuReportAssessmentJson } : {}),
         previousCandidates,
       }
       const runner = {
@@ -194,16 +237,39 @@ export function apply(ctx: Context, config: Config = {}): void {
 
 export type {
   KdaBottleneck,
+  KdaCandidateRole,
   KdaCandidateSummary,
   KdaCommandResult,
   KdaDecision,
+  KdaDecisionGate,
+  KdaDecisionGateName,
+  KdaDecisionGateStatus,
   KdaEvaluationRequest,
   KdaEvaluationResult,
+  KdaExpectedProfileDirection,
+  KdaHypothesisAssessment,
   KdaNcuMetric,
+  KdaMechanismVerdict,
+  KdaNcuDimensionAssessment,
+  KdaNcuDimensionName,
+  KdaNcuDimensionStatus,
+  KdaNcuPatternId,
+  KdaNcuPatternMatch,
+  KdaNcuRankedRecommendation,
+  KdaNcuReportAssessment,
+  KdaNcuReportSignal,
+  KdaNcuRuleFinding,
+  KdaMetricComparison,
   KdaProfileAnalysis,
+  KdaProfileComparison,
+  KdaProfileObservation,
+  KdaNextExperiment,
+  KdaProfileStatus,
+  KdaPromotionPolicy,
   KdaStageName,
   KdaStageResult,
   KdaTrajectoryEvent,
   KdaTrajectoryObserver,
 } from './types.js'
-export { analyzeNcuOutput } from './ncu.js'
+export { analyzeNcuOutput, canonicalNcuMetricName, compareNcuProfiles, withNcuComparison } from './ncu.js'
+export { NCU_DIMENSIONS, NCU_REPORT_SKILL_COMMIT, parseNcuReportAssessmentJson } from './ncu-report.js'

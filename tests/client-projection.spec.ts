@@ -1,38 +1,56 @@
 import { describe, expect, it } from 'vitest'
 import { parseKdaResult, projectKdaRuns, type KdaResultView } from '../src/client/kda-projection.js'
+import { ncuAssessment } from './fixtures.js'
+
+const unverified = {
+  verdict: 'unverified' as const,
+  evidence: [],
+  limitations: ['No declared metric mechanism.'],
+}
 
 function result(overrides: Partial<KdaResultView> = {}): KdaResultView {
   return {
-    schemaVersion: 2,
+    schemaVersion: 1,
     runId: 'run-a',
-    evaluationId: 'eval-1',
+    evaluationId: 'eval-baseline',
     iteration: 1,
     task: 'fused-rmsnorm',
     objective: 'Reduce median latency',
-    candidate: 'candidate-1',
-    parentCandidate: 'baseline',
-    hypothesis: 'Vector loads reduce stalls',
+    candidate: 'baseline',
+    candidateRole: 'baseline',
+    hypothesis: 'Measure the unmodified reference.',
     baselineMetric: 10,
-    candidateMetric: 8.5,
+    candidateMetric: 10,
     metricUnit: 'us',
-    improvementPercent: 15,
-    decision: 'promote',
-    reason: 'Correct and faster than the promotion threshold.',
+    lowerIsBetter: true,
+    minimumImprovementPercent: 5,
+    benchmarkContext: 'rtx5070ti-shape-a',
+    decision: 'baseline',
+    reason: 'Measured baseline recorded.',
     stages: [
       { stage: 'correctness', ok: true, durationMs: 12, exitCode: 0 },
-      { stage: 'benchmark', ok: true, durationMs: 20, exitCode: 0, metric: 8.5, metricUnit: 'us' },
+      { stage: 'benchmark', ok: true, durationMs: 20, exitCode: 0, metric: 10, metricUnit: 'us' },
     ],
+    profileStatus: 'not-requested',
+    mechanismAssessment: unverified,
+    promotionPolicy: { requireProfile: false, requireMechanism: false },
+    decisionGates: [],
+    contextWarnings: [],
     candidates: [{
-      evaluationId: 'eval-1',
-      candidate: 'candidate-1',
-      parentCandidate: 'baseline',
+      evaluationId: 'eval-baseline',
+      candidate: 'baseline',
+      candidateRole: 'baseline',
       iteration: 1,
-      hypothesis: 'Vector loads reduce stalls',
+      hypothesis: 'Measure the unmodified reference.',
       baselineMetric: 10,
-      candidateMetric: 8.5,
+      candidateMetric: 10,
       metricUnit: 'us',
-      improvementPercent: 15,
-      decision: 'promote',
+      lowerIsBetter: true,
+      minimumImprovementPercent: 5,
+      decision: 'baseline',
+      benchmarkContext: 'rtx5070ti-shape-a',
+      profileStatus: 'not-requested',
+      mechanismVerdict: 'unverified',
     }],
     ...overrides,
   }
@@ -57,27 +75,38 @@ describe('KDA client projection', () => {
     expect(parsed?.candidate).toBe('from-meta')
   })
 
-  it('groups evaluations by run and orders the latest run first', () => {
-    const first = result({ decision: 'revise', candidateMetric: 9.8, improvementPercent: 2, reason: 'Needs revision.' })
-    const second = result({
+  it('groups runs, orders candidates, and derives the measured baseline and best candidate', () => {
+    const baseline = result()
+    const candidate = result({
       evaluationId: 'eval-2',
       iteration: 2,
-      candidate: 'candidate-2',
-      parentCandidate: 'candidate-1',
+      candidate: 'vector-load-v1',
+      candidateRole: 'experiment',
+      parentCandidate: 'baseline',
+      hypothesis: 'Increase load width.',
+      changeSummary: 'Use float4 loads.',
       candidateMetric: 8.5,
+      improvementPercent: 15,
+      decision: 'promote',
+      reason: 'Correct and 15% faster.',
       candidates: [
-        ...(first.candidates ?? []),
+        ...(baseline.candidates ?? []),
         {
-          evaluationId: 'eval-2', candidate: 'candidate-2', parentCandidate: 'candidate-1', iteration: 2,
-          hypothesis: 'Increase vector width', candidateMetric: 8.5, metricUnit: 'us', decision: 'promote',
+          evaluationId: 'eval-2', candidate: 'vector-load-v1', candidateRole: 'experiment', parentCandidate: 'baseline', iteration: 2,
+          hypothesis: 'Increase load width.', candidateMetric: 8.5, baselineMetric: 10, metricUnit: 'us', improvementPercent: 15,
+          lowerIsBetter: true, minimumImprovementPercent: 5, decision: 'promote', benchmarkContext: 'rtx5070ti-shape-a',
+          profileStatus: 'not-requested', mechanismVerdict: 'unverified',
         },
       ],
     })
-    const other = result({ runId: 'run-b', evaluationId: 'eval-b', candidate: 'other' })
-    const runs = projectKdaRuns([node(first, 1), node(second, 2, true), node(other, 3)])
+    const other = result({ runId: 'run-b', evaluationId: 'eval-b', candidate: 'other-baseline' })
+    const runs = projectKdaRuns([node(candidate, 2, true), node(baseline, 1), node(other, 3)])
+
     expect(runs.map(run => run.runId)).toEqual(['run-b', 'run-a'])
-    expect(runs[1]?.evaluations.map(item => item.result.candidate)).toEqual(['candidate-1', 'candidate-2'])
-    expect(runs[1]?.lineage.map(item => item.candidate)).toEqual(['candidate-1', 'candidate-2'])
+    expect(runs[1]?.evaluations.map(item => item.result.candidate)).toEqual(['baseline', 'vector-load-v1'])
+    expect(runs[1]?.lineage.map(item => item.candidate)).toEqual(['baseline', 'vector-load-v1'])
+    expect(runs[1]?.baseline?.candidate).toBe('baseline')
+    expect(runs[1]?.best?.candidate).toBe('vector-load-v1')
   })
 
   it('ignores unrelated tools and de-duplicates one evaluation id', () => {
@@ -88,19 +117,75 @@ describe('KDA client projection', () => {
     expect(runs[0]?.evaluations).toHaveLength(1)
   })
 
-  it('keeps NCU diagnosis evidence for the dedicated view', () => {
+  it('keeps exact NCU measurements, comparisons, diagnosis, and mechanism evidence', () => {
     const evaluation = result({
+      profileStatus: 'comparable',
       profileAnalysis: {
         parser: 'kda-lines',
-        bottleneck: 'memory-throughput',
+        bottleneck: 'compute-throughput',
         confidence: 'medium',
         metricCount: 2,
-        evidence: ['dram__throughput.avg.pct_of_peak_sustained_elapsed=88 %'],
-        recommendations: ['Inspect coalescing.'],
+        metrics: [{ name: 'Compute (SM) Throughput', canonicalName: 'compute-throughput', value: 84, unit: '%' }],
+        keyMetrics: [{ name: 'Compute (SM) Throughput', canonicalName: 'compute-throughput', value: 84, unit: '%' }],
+        topStalls: [],
+        kernelNames: ['kernel_a'],
+        launchIds: ['1'],
+        evidence: ['Compute (SM) Throughput=84 %'],
+        observations: [{ kind: 'comparison', summary: 'Compute throughput increased.', evidence: ['compute-throughput'] }],
+        diagnosis: 'Compute throughput increased while duration fell.',
+        limitations: [],
+        recommendations: ['Inspect instruction mix.'],
+        nextExperiment: { action: 'Collect source counters.', rationale: 'Attribute the gain.', requiredMetrics: ['source counters'] },
+        comparison: {
+          referenceCandidate: 'baseline', candidate: 'vector-load-v1', profileContext: 'same-ncu-context', warnings: [],
+          metrics: [{
+            canonicalName: 'compute-throughput', name: 'Compute (SM) Throughput', unit: '%',
+            baselineValue: 70, candidateValue: 84, delta: 14, deltaPercent: 20,
+          }],
+        },
       },
+      mechanismAssessment: {
+        verdict: 'supported', expectedMetric: 'compute-throughput', expectedDirection: 'increase',
+        evidence: ['Compute throughput increased by 20%.'], limitations: [],
+      },
+      promotionPolicy: { requireProfile: true, requireMechanism: true },
+      decisionGates: [{
+        name: 'mechanism', status: 'passed', blocking: true,
+        summary: 'Required NCU mechanism verdict is supported.', evidence: ['Compute throughput increased by 20%.'],
+      }],
+      ncuReportAssessment: ncuAssessment(),
     })
     const runs = projectKdaRuns([node(evaluation, 1)])
-    expect(runs[0]?.evaluations[0]?.result.profileAnalysis?.bottleneck).toBe('memory-throughput')
-    expect(runs[0]?.evaluations[0]?.result.profileAnalysis?.evidence).toHaveLength(1)
+    const projected = runs[0]?.evaluations[0]?.result
+    expect(projected?.profileAnalysis?.comparison?.metrics[0]?.deltaPercent).toBe(20)
+    expect(projected?.profileAnalysis?.diagnosis).toContain('duration fell')
+    expect(projected?.mechanismAssessment.verdict).toBe('supported')
+    expect(projected?.promotionPolicy).toEqual({ requireProfile: true, requireMechanism: true })
+    expect(projected?.decisionGates[0]).toMatchObject({ name: 'mechanism', status: 'passed', blocking: true })
+    expect(projected?.ncuReportAssessment).toMatchObject({
+      source: 'mit-han-lab/ncu-report-skill',
+      primaryDiagnosis: 'The kernel is latency-bound on dependent global loads, not DRAM bandwidth.',
+    })
+    expect(projected?.ncuReportAssessment?.dimensions).toHaveLength(6)
+    expect(projected?.ncuReportAssessment?.patterns[0]).toMatchObject({ id: 'E', estimatedSpeedupPercent: 18 })
+    expect(projected?.ncuReportAssessment?.reportMarkdown).toContain('Key metrics')
+  })
+
+  it('degrades an incomplete schema-v1 result honestly and rejects every other schema', () => {
+    const partial = {
+      schemaVersion: 1,
+      runId: 'partial',
+      candidate: 'candidate',
+      decision: 'revise',
+      profileAnalysis: { parser: 'ncu-csv', metricCount: 1, metrics: [{ name: 'Duration', value: 8 }] },
+    }
+    const parsed = parseKdaResult(partial, [])
+    expect(parsed).toMatchObject({
+      candidateRole: 'experiment', profileStatus: 'not-requested', reason: 'Evaluation result is incomplete.',
+      mechanismAssessment: { verdict: 'unverified' },
+      decisionGates: [],
+    })
+    expect(parsed?.profileAnalysis).toMatchObject({ launchIds: [], kernelNames: [], diagnosis: 'Profile analysis is incomplete.' })
+    expect(parseKdaResult({ ...partial, schemaVersion: 3 }, [])).toBeUndefined()
   })
 })

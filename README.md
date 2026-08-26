@@ -1,26 +1,46 @@
 # dsh-kda
 
-A trajectory-aware [Kernel Design Agents](https://github.com/mit-han-lab/kernel-design-agents) integration for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness).
+`dsh-kda` is a semantic CUDA-optimization Trajectory viewer for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), inspired by [Kernel Design Agents](https://github.com/mit-han-lab/kernel-design-agents).
 
-The plugin evaluates one implemented kernel candidate at a time and reconstructs its optimization run from prior durable dsh tool results. It runs correctness, benchmark, and optional profiling commands through dsh's `ctx.shell` executor, then persists structured presentation metadata containing candidate lineage, NCU evidence, and the promotion decision. The Web integration provides both an inline result card and a dedicated `KDA` conversation tab.
+It turns ordinary durable dsh tool results into one inspectable evidence chain:
 
-KDA remains the workflow reference; this plugin turns its evidence and promotion loop into an executable dsh workflow.
+```text
+hypothesis → candidate → change → correctness → benchmark → profile → decision → next experiment
+```
 
-## Current scope
+The plugin does not provide GPUs, benchmarks, hidden tests, or a second session store. Project commands remain responsible for correctness, benchmarking, and NCU collection. KDA organizes their evidence and keeps the native Conversation and Trajectory views intact.
 
-- Correctness-first candidate evaluation.
-- Optional benchmark and profiling stages.
-- Configurable metric parsing, direction, and promotion threshold.
-- Stable optimization run ids reconstructed after session resume or replay.
-- Replayable `kda/*` event ledger, native nested Trajectory nodes, and structured dsh presentation metadata.
-- Candidate ids, parent links, hypotheses, source revisions, and lineage projection.
-- NCU raw CSV and `KDA_NCU_METRIC` parsing with conservative bottleneck guidance.
-- Dedicated `KDA` conversation tab grouping runs, candidate lineage, stages, command evidence, NCU diagnosis, and decisions.
-- Inline Web result card for the latest evaluation without leaving the Conversation tab.
-- A bundled KDA workflow skill mounted automatically by the plugin Bundle.
-- Reference Python JSONL driver for integrations outside dsh.
+## What it provides
 
-The plugin does not generate kernel source independently of the coding agent and does not decode binary `.ncu-rep` files itself. Use NVIDIA's `ncu_report` Python API or an NCU CSV exporter in `profileCommand`, and point `profileArtifact` at the immutable report. The `KDA` tab reconstructs its complete view exclusively from ordinary durable tool results; it does not add a custom Session event vocabulary. In dsh's native Trajectory, each evaluation remains one durable root tool call while candidate, correctness, benchmark, profile, diagnosis, and decision records appear as native nested calls beneath it.
+- An explicit measured baseline as the first candidate in every run.
+- Stable candidate lineage reconstructed from `ConversationSnapshot.nodes` after reload or recovery.
+- Correctness-first command execution and a repeatable benchmark contract.
+- NCU CSV and `KDA_NCU_METRIC` parsing for raw ids and display names.
+- Canonical metrics such as duration, compute/DRAM throughput, occupancy, registers, shared memory, waves per SM, and warp stalls.
+- Same-context, same-unit baseline-to-candidate profiler deltas.
+- A performance decision separate from the profiler-backed mechanism verdict.
+- Honest states for skipped, failed, empty, current-only, and comparable profiles.
+- The original MIT HAN Lab `ncu-report-skill` workflow, six analysis dimensions, diagnosis playbook, B200 references, and helper scripts.
+- A thin KDA recorder adapter that persists candidate lineage and evidence without replacing the original report's diagnosis.
+- A dedicated `KDA` conversation tab plus an inline evaluator result card.
+- Native nested Trajectory nodes for candidate, stages, mechanism assessment, and decision.
+- Dedicated KDA nodes for the original report, all six analysis dimensions, playbook matches, NCU rules, and ranked recommendations.
+- A session-recoverable Original NCU detail drawer with all parsed metrics, comparisons, six-dimensional evidence, decisions, raw profiler output, and the complete embedded `REPORT.md`.
+- The bundled upstream `ncu-report-skill` as the profiling authority, plus a clearly labeled non-authoritative compact metric overview when no original report exists.
+
+The current result format is `schemaVersion: 1` and the package version is `0.0.1`. This repository has not been released, so earlier development schemas are intentionally not projected or migrated.
+
+## Original NCU report skill
+
+The profiling skill under `skills/ncu-report-skill` is vendored unchanged from
+[mit-han-lab/ncu-report-skill](https://github.com/mit-han-lab/ncu-report-skill) at commit
+`1cf238d6b41c79bd35041192506c4d45e765a3f1`.
+
+It is registered as `ncu-report-skill` and remains the authority for profile collection, `ncu_report`
+parsing, six-dimensional analysis, playbook matching, source hotspots, PM sampling, and ranked
+recommendations. The separate `kda-recorder` skill only maps completed evidence into the durable KDA
+trajectory. The compact TypeScript overview classifier is presentation metadata, not a replacement
+for the original `REPORT.md`.
 
 ## Install
 
@@ -28,9 +48,9 @@ Requirements:
 
 - Node.js `^22.19` or `>=24`.
 - pnpm 11.
-- A dsh Web profile with its normal shell, tool, and skill services.
+- A dsh Web profile with its normal shell, tool, skill, and conversation UI services.
 
-Install a local checkout into the Web profile:
+Install a local checkout:
 
 ```bash
 pnpm install
@@ -41,90 +61,141 @@ dsh --profile web --dump-config
 dsh --profile web
 ```
 
-Restart the profile after adding, removing, or updating the Bundle. The composed configuration should contain this row:
+Restart the profile after installing or updating the Bundle. The composed configuration should include:
 
 ```yaml
 - id: kda
   name: dsh-kda
 ```
 
-Open any session containing a `kda_evaluate_candidate` result and select `KDA` beside the Conversation and Trajectory tabs. The newest optimization run is expanded automatically. Sessions with no KDA result show an empty-state prompt; no extra backend or event migration is required.
+Open a session containing schema-v1 `kda_evaluate_candidate` results and select `KDA` beside Conversation and Trajectory. A session without them shows an honest empty state.
 
-For a git installation, pin a commit and authorize only this package's `prepare` build when pnpm asks:
+## Evaluation workflow
 
-```bash
-dsh plugin --profile web add github:YOUR_ORG/dsh-kda#COMMIT_SHA
-```
+Choose one stable `optimizationRunId` and one immutable task contract. The benchmark context, unit, direction, and promotion threshold must remain identical throughout the run.
 
-## Agent workflow
-
-1. Define correctness and performance criteria.
-2. Measure a real baseline.
-3. Choose a stable optimization run id and a testable hypothesis.
-4. Implement one candidate and give it a unique id plus its parent id.
-5. Call `kda_evaluate_candidate`; later calls reconstruct previous candidates from the session automatically.
-6. Promote only on `promote`; use `profileAnalysis`, `revise`, and `reject` evidence to choose the next single-variable candidate.
-
-Example tool arguments:
+First, evaluate the unmodified implementation:
 
 ```json
 {
-  "optimizationRunId": "fused-rmsnorm-b200-shape-128x4096",
+  "optimizationRunId": "fused-rmsnorm-b200-128x4096",
   "task": "fused-rmsnorm",
-  "objective": "Minimize median latency while matching the reference within atol=1e-5 and rtol=1e-5.",
-  "candidate": "vectorized-load-v2",
-  "parentCandidate": "baseline",
-  "hypothesis": "A 128-bit coalesced load reduces long-scoreboard stalls without increasing register pressure.",
-  "changeSummary": "Replace four scalar loads with one aligned float4 load.",
-  "sourceRevision": "git:abc1234",
+  "objective": "Minimize median latency while matching atol=1e-5 and rtol=1e-5.",
+  "candidate": "baseline",
+  "candidateRole": "baseline",
+  "hypothesis": "Measure the unmodified reference implementation.",
+  "changeSummary": "No optimization change.",
   "workdir": ".",
   "correctnessCommand": "python tests/check.py",
   "benchmarkCommand": "python benchmarks/run.py --emit-kda-metric",
-  "profileCommand": "python tools/summarize_ncu.py profile/vectorized-load-v2.ncu-rep --emit-kda-lines",
-  "profileArtifact": "profile/vectorized-load-v2.ncu-rep",
-  "baselineMetric": 42.1,
+  "benchmarkContext": "b200-cuda13-shape128x4096-median100",
+  "profileCommand": "python tools/export_ncu.py profile/baseline.ncu-rep",
+  "profileContext": "b200-ncu2026-full-shape128x4096-kernel-rmsnorm",
+  "profileArtifact": "profile/baseline.ncu-rep",
+  "ncuReportAssessmentJson": "<serialized original-report sidecar>",
   "metricUnit": "us",
   "lowerIsBetter": true,
   "minimumImprovementPercent": 5
 }
 ```
 
-The first candidate may name an external baseline as its parent. Every later candidate must name a candidate already present in the run. Candidate ids cannot be reused.
+Then evaluate one hypothesis-driven experiment with the same run id and contract:
 
-## Benchmark and NCU output
+```json
+{
+  "optimizationRunId": "fused-rmsnorm-b200-128x4096",
+  "task": "fused-rmsnorm",
+  "objective": "Minimize median latency while matching atol=1e-5 and rtol=1e-5.",
+  "candidate": "vectorized-load-v1",
+  "candidateRole": "experiment",
+  "parentCandidate": "baseline",
+  "hypothesis": "Aligned 128-bit loads increase compute throughput without increasing register pressure.",
+  "changeSummary": "Replace four scalar loads with one aligned float4 load.",
+  "sourceRevision": "git:abc1234",
+  "workdir": ".",
+  "correctnessCommand": "python tests/check.py",
+  "benchmarkCommand": "python benchmarks/run.py --emit-kda-metric",
+  "benchmarkContext": "b200-cuda13-shape128x4096-median100",
+  "profileCommand": "python tools/export_ncu.py profile/vectorized-load-v1.ncu-rep",
+  "profileContext": "b200-ncu2026-full-shape128x4096-kernel-rmsnorm",
+  "profileArtifact": "profile/vectorized-load-v1.ncu-rep",
+  "ncuReportAssessmentJson": "<serialized original-report sidecar>",
+  "metricUnit": "us",
+  "lowerIsBetter": true,
+  "minimumImprovementPercent": 5,
+  "expectedProfileMetric": "compute-throughput",
+  "expectedProfileDirection": "increase",
+  "expectedProfileMinimumChangePercent": 5
+}
+```
 
-By default, benchmark stdout must contain:
+The baseline metric is never supplied by the model. It is measured by the first benchmark and inherited from durable session history. When `profileCommand` is present, `ncuReportAssessmentJson` is required and must follow [`skills/kda/references/ncu-assessment-schema.md`](skills/kda/references/ncu-assessment-schema.md); it is produced from the original skill's completed report rather than inferred by the evaluator. Its `reportMarkdown` field carries the complete report text so the detail drawer survives session recovery without depending on the original workspace file.
+
+## Benchmark and profiler output
+
+Benchmark stdout must contain a finite value:
 
 ```text
 KDA_METRIC=37.8
 ```
 
-The final occurrence wins. For another format, pass `metricPattern`; capture group 1 or named group `metric` must contain the number:
+The final occurrence wins. For another format, provide a JavaScript `metricPattern`; capture group 1 or named group `metric` must contain the number.
 
-```json
-{
-  "metricPattern": "median:\\s*(?<metric>\\d+(?:\\.\\d+)?)\\s*us"
-}
+Profiler output can be NCU CSV with at least these columns:
+
+```text
+Metric Name,Metric Unit,Metric Value
 ```
 
-Profiler output can be NCU CSV with `Metric Name`, `Metric Unit`, and `Metric Value` columns, or explicit lines:
+`Kernel Name` and `Section Name` are retained when present. A custom extractor can instead emit:
 
 ```text
 KDA_NCU_METRIC=dram__throughput.avg.pct_of_peak_sustained_elapsed|88|%
 KDA_NCU_METRIC=smsp__warp_issue_stalled_long_scoreboard.per_warp_active.pct|12.5|%
 ```
 
-The diagnosis is deliberately conservative. Missing or ambiguous structured metrics produce `unknown` with low confidence instead of an invented bottleneck.
+The parser recognizes both raw NCU identifiers and display names such as `Compute (SM) Throughput`, `DRAM Throughput`, `Duration`, `Achieved Occupancy`, and `Registers Per Thread`.
 
-## Decisions
+Profile deltas require matching `profileContext` values and matching units. Profiles containing multiple kernels or launch IDs remain visible but are not used for an automatic causal comparison; filter NCU to one target launch. A Windows benchmark and a WSL2 profile may coexist, but the UI warns that profiler duration is not the promotion metric when their contexts differ.
+
+## Performance and mechanism are separate
+
+`decision` answers whether the candidate should be kept based on correctness and the benchmark contract:
 
 | Decision | Meaning |
 |---|---|
-| `promote` | Correctness passed, benchmark produced a metric, a baseline exists, requested profiling succeeded, and the improvement threshold was met. |
-| `revise` | Correctness passed but evidence is incomplete, profiling failed, no baseline exists, or the improvement threshold was not met. |
+| `baseline` | The unmodified candidate passed correctness and produced the measured reference metric. |
+| `promote` | Correctness passed and the candidate met the benchmark threshold plus any explicitly required evidence gates. |
+| `revise` | Evidence was incomplete, the improvement was too small, or a required profile/mechanism gate was not met. |
 | `reject` | Correctness or the benchmark command failed. |
 
-Commands run sequentially. A correctness failure prevents benchmark and profiling from running. Commands inherit the active dsh shell provider's timeout, process, and sandbox behavior; the plugin does not spawn an unsandboxed process directly.
+`mechanismAssessment.verdict` independently answers whether comparable profiler evidence supports the predeclared mechanism:
+
+| Verdict | Meaning |
+|---|---|
+| `supported` | The declared metric moved in the expected direction by the required amount. |
+| `partially-supported` | It moved in the expected direction but did not clear the declared magnitude. |
+| `contradicted` | It moved materially in the opposite direction. |
+| `unverified` | No expectation, comparable reference, aligned metric, or finite percentage delta was available. |
+
+A candidate can therefore be `promote` + `unverified`: it is measurably faster, but the claimed cause has not been proven. Set `requireMechanismForPromotion=true` only when that distinction must block promotion.
+
+## KDA view
+
+The dedicated view uses a compact semantic ledger modeled on dsh's native Trajectory visual language:
+
+- A three-lane overview for candidates, evidence stages, and mechanism verdicts.
+- One expandable ledger per candidate with parent links, measured value, improvement, and decision.
+- Dedicated Hypothesis, Change, Correctness, Benchmark, Profile, Mechanism, Decision, and Evidence nodes.
+- Original NCU, Dim 1–6, Playbook, NCU Rules, and Ranked Plan nodes projected directly from the original report sidecar.
+- A `View full NCU report` drawer with Summary, Six dimensions, All metrics, Rules & plan, and Raw report sections.
+- Exact profiler measurements and aligned deltas directly below the Profile row.
+- Observation, diagnosis, limitations, and the next falsifying experiment without opening raw logs.
+- Collapsible commands, stdout/stderr, artifacts, source revision, and dsh call identifiers when deeper inspection is needed.
+
+The native Trajectory package does not expose a public row-renderer slot, so KDA keeps its specialized nodes in this dedicated tab while preserving the ordinary native Trajectory unchanged.
+
+The view is a pure projection of ordinary durable tool results. Missing or failed evidence produces a partial view instead of invented values or a crashed conversation slot.
 
 ## Configuration
 
@@ -140,20 +211,6 @@ Override the Bundle row from the profile's `cordis.patch.yml`:
 
 Patch configuration replaces the complete `config` object. Restate every value you want to retain.
 
-## Skill
-
-The plugin registers [`skills/kda/SKILL.md`](skills/kda/SKILL.md) directly in dsh's global skill registry. Every agent preset can therefore discover and load it without copying files into the user's global skill root or relying on bundle-relative filesystem paths. Its description triggers on kernel optimization, profiling, NCU analysis, and continuation requests in English or Chinese.
-
-## Python JSONL driver
-
-`scripts/kda_driver.py` retains the original single-candidate evidence vocabulary for a non-dsh orchestrator:
-
-```bash
-python scripts/kda_driver.py examples/request.json --result result.json > trajectory.jsonl
-```
-
-Unlike the dsh plugin, the reference driver uses Python's host shell directly. Treat request files as trusted executable configuration. In dsh, prefer the model tool because it uses `ctx.shell`.
-
 ## Development
 
 ```bash
@@ -164,4 +221,4 @@ pnpm build
 pnpm pack
 ```
 
-The package sets `autoInstallPeers: false`: a real dsh profile supplies the runtime peer services. The plugin declares its peer requirements for package managers and future stable releases.
+The package sets `autoInstallPeers: false`; the real dsh profile supplies runtime peer services.

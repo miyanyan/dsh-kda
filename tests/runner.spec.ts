@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { evaluateCandidate, parseMetric } from '../src/runner.js'
-import type { KdaCommandResult, KdaCommandRunner, KdaStageName } from '../src/types.js'
+import type { KdaCommandResult, KdaCommandRunner, KdaEvaluationRequest, KdaStageName } from '../src/types.js'
+import { ncuAssessmentJson } from './fixtures.js'
 
 function result(stdout: string, exitCode = 0): KdaCommandResult {
   return {
@@ -23,20 +24,51 @@ function runner(outputs: Partial<Record<KdaStageName, KdaCommandResult>>): KdaCo
   }
 }
 
-const baseRequest = {
+const baselineRequest: KdaEvaluationRequest = {
   optimizationRunId: 'vector-add-smoke',
   task: 'vector-add',
   objective: 'Minimize latency while preserving exact output.',
-  candidate: 'candidate-1',
-  hypothesis: 'Vectorized loads reduce global-memory instructions.',
+  candidate: 'baseline',
+  candidateRole: 'baseline',
+  hypothesis: 'The unmodified implementation establishes the measured reference.',
+  changeSummary: 'No source change.',
   workdir: '/workspace',
   correctnessCommand: 'validate',
   benchmarkCommand: 'benchmark',
-  baselineMetric: 10,
+  benchmarkContext: 'rtx5070ti-driver-590-shape-1m',
   metricUnit: 'us',
   lowerIsBetter: true,
   minimumImprovementPercent: 5,
-} as const
+}
+
+async function measuredBaseline(profile = false) {
+  return evaluateCandidate({
+    ...baselineRequest,
+    ...(profile ? { profileCommand: 'profile', profileContext: 'wsl-rtx5070ti-ncu2026-shape-1m', ncuReportAssessmentJson: ncuAssessmentJson() } : {}),
+  }, runner({
+    correctness: result('ok'),
+    benchmark: result('KDA_METRIC=10'),
+    ...(profile ? {
+      profile: result([
+        'KDA_NCU_METRIC=Compute (SM) Throughput|70|%',
+        'KDA_NCU_METRIC=DRAM Throughput|20|%',
+        'KDA_NCU_METRIC=Duration|10|ms',
+      ].join('\n')),
+    } : {}),
+  }))
+}
+
+function experiment(previousCandidates: KdaEvaluationRequest['previousCandidates']): KdaEvaluationRequest {
+  return {
+    ...baselineRequest,
+    candidate: 'vectorized-load-v1',
+    candidateRole: 'experiment',
+    parentCandidate: 'baseline',
+    hypothesis: 'Vectorized loads increase compute throughput at the same workload.',
+    changeSummary: 'Replace scalar loads with one aligned vector load.',
+    previousCandidates,
+  }
+}
 
 describe('parseMetric', () => {
   it('uses the final emitted metric', () => {
@@ -49,81 +81,172 @@ describe('parseMetric', () => {
 })
 
 describe('evaluateCandidate', () => {
-  it('promotes a correct candidate that clears the performance threshold', async () => {
-    const output = await evaluateCandidate(baseRequest, runner({
+  it('records the first measured candidate as the explicit baseline', async () => {
+    const output = await measuredBaseline()
+    expect(output.schemaVersion).toBe(1)
+    expect(output.decision).toBe('baseline')
+    expect(output.baselineMetric).toBe(10)
+    expect(output.candidateMetric).toBe(10)
+    expect(output.profileStatus).toBe('not-requested')
+    expect(output.mechanismAssessment.verdict).toBe('unverified')
+    expect(output.candidates[0]).toMatchObject({
+      candidate: 'baseline', candidateRole: 'baseline', candidateMetric: 10, baselineMetric: 10,
+      benchmarkContext: baselineRequest.benchmarkContext,
+    })
+  })
+
+  it('keeps the performance decision separate from a supported profiler mechanism', async () => {
+    const baseline = await measuredBaseline(true)
+    const output = await evaluateCandidate({
+      ...experiment(baseline.candidates),
+      profileCommand: 'profile',
+      profileContext: 'wsl-rtx5070ti-ncu2026-shape-1m',
+      expectedProfileMetric: 'compute-throughput',
+      expectedProfileDirection: 'increase',
+      expectedProfileMinimumChangePercent: 10,
+      ncuReportAssessmentJson: ncuAssessmentJson(),
+    }, runner({
       correctness: result('ok'),
       benchmark: result('KDA_METRIC=8.5'),
+      profile: result([
+        'KDA_NCU_METRIC=sm__throughput.avg.pct_of_peak_sustained_elapsed|84|%',
+        'KDA_NCU_METRIC=DRAM Throughput|18|%',
+        'KDA_NCU_METRIC=Duration|8|ms',
+      ].join('\n')),
     }))
+
     expect(output.decision).toBe('promote')
     expect(output.improvementPercent).toBeCloseTo(15)
-    expect(output.trajectory.map(event => event.type)).toEqual([
-      'kda/run-started',
-      'kda/candidate-proposed',
-      'kda/stage-started',
-      'kda/stage-completed',
-      'kda/stage-started',
-      'kda/stage-completed',
-      'kda/decision-made',
-      'kda/candidate-finished',
-      'kda/run-finished',
-    ])
-    expect(output.runId).toBe('vector-add-smoke')
-    expect(output.iteration).toBe(1)
-    expect(output.candidates).toHaveLength(1)
+    expect(output.profileStatus).toBe('comparable')
+    expect(output.mechanismAssessment.verdict).toBe('supported')
+    expect(output.promotionPolicy).toEqual({ requireProfile: false, requireMechanism: false })
+    expect(output.decisionGates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'profile', status: 'advisory', blocking: false }),
+      expect.objectContaining({ name: 'mechanism', status: 'advisory', blocking: false }),
+    ]))
+    expect(output.mechanismAssessment.observed).toMatchObject({ baselineValue: 70, candidateValue: 84 })
+    expect(output.profileAnalysis?.comparison?.referenceCandidate).toBe('baseline')
+    expect(output.ncuReportAssessment?.primaryDiagnosis).toContain('latency-bound')
+    expect(output.contextWarnings[0]).toContain('Benchmark and profile contexts differ')
+  })
+
+  it('disables causal profiler deltas when profile contexts differ', async () => {
+    const baseline = await measuredBaseline(true)
+    const output = await evaluateCandidate({
+      ...experiment(baseline.candidates),
+      profileCommand: 'profile',
+      profileContext: 'different-wsl-context',
+      expectedProfileMetric: 'compute-throughput',
+      expectedProfileDirection: 'increase',
+      ncuReportAssessmentJson: ncuAssessmentJson(),
+    }, runner({
+      correctness: result('ok'),
+      benchmark: result('KDA_METRIC=8.5'),
+      profile: result('KDA_NCU_METRIC=Compute (SM) Throughput|84|%'),
+    }))
+
+    expect(output.decision).toBe('promote')
+    expect(output.profileStatus).toBe('current-only')
+    expect(output.profileAnalysis?.comparison).toBeUndefined()
+    expect(output.mechanismAssessment.verdict).toBe('unverified')
+    expect(output.profileAnalysis?.limitations.join(' ')).toContain('Profile contexts differ')
+  })
+
+  it('can promote measured performance while explicitly leaving the mechanism unverified', async () => {
+    const baseline = await measuredBaseline()
+    const output = await evaluateCandidate({
+      ...experiment(baseline.candidates),
+      profileCommand: 'profile',
+      profileContext: 'wsl-rtx5070ti-ncu2026-shape-1m',
+      ncuReportAssessmentJson: ncuAssessmentJson(),
+    }, runner({
+      correctness: result('ok'),
+      benchmark: result('KDA_METRIC=8'),
+      profile: result('==PROF== report imported successfully'),
+    }))
+
+    expect(output.decision).toBe('promote')
+    expect(output.profileStatus).toBe('no-parseable-metrics')
+    expect(output.mechanismAssessment.verdict).toBe('unverified')
+  })
+
+  it('revises when mechanism evidence is required but contradicted', async () => {
+    const baseline = await measuredBaseline(true)
+    const output = await evaluateCandidate({
+      ...experiment(baseline.candidates),
+      profileCommand: 'profile',
+      profileContext: 'wsl-rtx5070ti-ncu2026-shape-1m',
+      expectedProfileMetric: 'compute-throughput',
+      expectedProfileDirection: 'increase',
+      expectedProfileMinimumChangePercent: 5,
+      requireMechanismForPromotion: true,
+      ncuReportAssessmentJson: ncuAssessmentJson(),
+    }, runner({
+      correctness: result('ok'),
+      benchmark: result('KDA_METRIC=8'),
+      profile: result('KDA_NCU_METRIC=Compute (SM) Throughput|60|%'),
+    }))
+
+    expect(output.decision).toBe('revise')
+    expect(output.mechanismAssessment.verdict).toBe('contradicted')
+    expect(output.reason).toContain('mechanism is contradicted')
+    expect(output.promotionPolicy.requireMechanism).toBe(true)
+    expect(output.decisionGates).toContainEqual(expect.objectContaining({ name: 'mechanism', status: 'failed', blocking: true }))
   })
 
   it('stops after correctness failure', async () => {
-    const output = await evaluateCandidate(baseRequest, runner({ correctness: result('bad', 1) }))
+    const output = await evaluateCandidate(baselineRequest, runner({ correctness: result('bad', 1) }))
     expect(output.decision).toBe('reject')
     expect(output.stages).toHaveLength(1)
   })
 
-  it('requires a baseline before promotion', async () => {
-    const { baselineMetric: _baseline, ...withoutBaseline } = baseRequest
-    const output = await evaluateCandidate(withoutBaseline, runner({
+  it('rejects a failed benchmark and marks the requested profile as skipped', async () => {
+    const output = await evaluateCandidate({
+      ...baselineRequest,
+      profileCommand: 'profile',
+      profileContext: 'wsl-rtx5070ti-ncu2026-shape-1m',
+      ncuReportAssessmentJson: ncuAssessmentJson(),
+    }, runner({
       correctness: result('ok'),
-      benchmark: result('KDA_METRIC=8.5'),
+      benchmark: result('benchmark failed', 1),
     }))
-    expect(output.decision).toBe('revise')
-    expect(output.reason).toContain('baseline')
+    expect(output.decision).toBe('reject')
+    expect(output.profileStatus).toBe('skipped')
+    expect(output.stages.map(stage => stage.stage)).toEqual(['correctness', 'benchmark'])
+  })
+
+  it('rejects profiling without the original skill assessment before running commands', async () => {
+    await expect(evaluateCandidate({
+      ...baselineRequest,
+      profileCommand: 'profile',
+      profileContext: 'wsl-rtx5070ti-ncu2026-shape-1m',
+    }, runner({ correctness: result('should not run') }))).rejects.toThrow('ncuReportAssessmentJson is required')
+  })
+
+  it('rejects a first candidate that is not an explicit baseline', async () => {
+    await expect(evaluateCandidate({
+      ...baselineRequest,
+      candidate: 'candidate-1',
+      candidateRole: 'experiment',
+    }, runner({ correctness: result('ok') }))).rejects.toThrow('must have candidateRole=baseline')
+  })
+
+  it('rejects task-contract drift from the measured baseline', async () => {
+    const baseline = await measuredBaseline()
+    await expect(evaluateCandidate({
+      ...experiment(baseline.candidates),
+      benchmarkContext: 'another-machine',
+    }, runner({ correctness: result('ok') }))).rejects.toThrow('benchmarkContext must match')
   })
 
   it('continues a run without emitting a second run-started event', async () => {
-    const output = await evaluateCandidate({
-      ...baseRequest,
-      candidate: 'candidate-2',
-      parentCandidate: 'candidate-1',
-      hypothesis: 'Unrolling hides load latency.',
-      previousCandidates: [{
-        evaluationId: 'evaluation-1',
-        candidate: 'candidate-1',
-        iteration: 1,
-        hypothesis: baseRequest.hypothesis,
-        baselineMetric: 10,
-        candidateMetric: 9,
-        metricUnit: 'us',
-        improvementPercent: 10,
-        decision: 'revise',
-      }],
-    }, runner({
+    const baseline = await measuredBaseline()
+    const output = await evaluateCandidate(experiment(baseline.candidates), runner({
       correctness: result('ok'),
       benchmark: result('KDA_METRIC=8'),
     }))
     expect(output.iteration).toBe(2)
-    expect(output.candidates.map(candidate => candidate.candidate)).toEqual(['candidate-1', 'candidate-2'])
+    expect(output.candidates.map(candidate => candidate.candidate)).toEqual(['baseline', 'vectorized-load-v1'])
     expect(output.trajectory.some(event => event.type === 'kda/run-started')).toBe(false)
-  })
-
-  it('rejects duplicate candidate ids in one run', async () => {
-    await expect(evaluateCandidate({
-      ...baseRequest,
-      previousCandidates: [{
-        evaluationId: 'evaluation-1',
-        candidate: 'candidate-1',
-        iteration: 1,
-        hypothesis: baseRequest.hypothesis,
-        decision: 'revise',
-      }],
-    }, runner({ correctness: result('ok') }))).rejects.toThrow('already exists')
   })
 })
