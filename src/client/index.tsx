@@ -2,6 +2,8 @@ import * as React from 'react'
 import { useState, type CSSProperties } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+import type { ChatStore } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import { KdaView } from './kda-view.js'
 import {
   parseKdaResult,
@@ -169,7 +171,7 @@ export function KdaToolRow({ block, inspect }: ToolCallViewProps) {
   )
 }
 
-export const inject = ['slots']
+export const inject = ['slots', 'layout']
 
 /** Register the keyed result card and the dedicated KDA conversation view. */
 export function apply(ctx: Context): void {
@@ -177,13 +179,28 @@ export function apply(ctx: Context): void {
     { name: 'tool.call.toolview', key: 'kda_evaluate_candidate' },
     KdaToolRow,
   ))
-  ctx.slots.inject('conversation.view', () => ctx.slots.register(
-    {
+  ctx.slots.inject('conversation.view', () => {
+    const chatEntry = ctx.slots.entriesOfSlot('conversation.view').find(entry => entry.options.id === 'chat')
+    const chatStore = chatEntry?.store as ChatStore | undefined
+    if (chatStore === undefined) throw new Error('dsh-kda requires the standard Chat conversation view store')
+    return ctx.slots.register({
       name: 'conversation.view',
       id: 'kda',
       order: 30,
       label: () => 'KDA',
+      store: chatStore,
+      inject: (_sessionId, actions) => ({
+        openCall: (callId: string, seq: number) => {
+          actions.select({ turnSeq: seq, callId, toolName: 'kda_evaluate_candidate' })
+          ctx.layout.openDetails()
+        },
+        inspectCall: (callId: string) => {
+          actions.setInspect({ callId })
+          actions.setView('trajectory')
+        },
+      }),
     },
     KdaView,
-  ))
+    )
+  })
 }

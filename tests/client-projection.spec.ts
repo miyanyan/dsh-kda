@@ -75,7 +75,7 @@ describe('KDA client projection', () => {
     expect(parsed?.candidate).toBe('from-meta')
   })
 
-  it('groups runs, orders candidates, and derives the measured baseline and best candidate', () => {
+  it('groups runs, orders candidates, and derives the measured baseline, promoted best, and fastest measurement', () => {
     const baseline = result()
     const candidate = result({
       evaluationId: 'eval-2',
@@ -106,7 +106,73 @@ describe('KDA client projection', () => {
     expect(runs[1]?.evaluations.map(item => item.result.candidate)).toEqual(['baseline', 'vector-load-v1'])
     expect(runs[1]?.lineage.map(item => item.candidate)).toEqual(['baseline', 'vector-load-v1'])
     expect(runs[1]?.baseline?.candidate).toBe('baseline')
-    expect(runs[1]?.best?.candidate).toBe('vector-load-v1')
+    expect(runs[1]?.bestPromoted?.candidate).toBe('vector-load-v1')
+    expect(runs[1]?.fastestMeasured?.candidate).toBe('vector-load-v1')
+  })
+
+  it('never labels a faster revised candidate as the best promoted candidate', () => {
+    const baseline = result()
+    const promoted = {
+      evaluationId: 'eval-promoted', candidate: 'safe-v1', candidateRole: 'experiment' as const, parentCandidate: 'baseline', iteration: 2,
+      hypothesis: 'Make a safe improvement.', candidateMetric: 9, baselineMetric: 10, metricUnit: 'us', improvementPercent: 10,
+      lowerIsBetter: true, minimumImprovementPercent: 5, decision: 'promote' as const,
+    }
+    const revised = {
+      evaluationId: 'eval-revised', candidate: 'fast-but-unverified', candidateRole: 'experiment' as const, parentCandidate: 'baseline', iteration: 3,
+      hypothesis: 'Try an aggressive path.', candidateMetric: 7, baselineMetric: 10, metricUnit: 'us', improvementPercent: 30,
+      lowerIsBetter: true, minimumImprovementPercent: 5, decision: 'revise' as const,
+    }
+    const latest = result({
+      evaluationId: 'eval-revised', iteration: 3, candidate: revised.candidate, candidateRole: 'experiment', parentCandidate: 'baseline',
+      hypothesis: revised.hypothesis, candidateMetric: 7, improvementPercent: 30, decision: 'revise',
+      candidates: [...(baseline.candidates ?? []), promoted, revised],
+    })
+    const run = projectKdaRuns([node(latest, 3), node(baseline, 1)])[0]
+    expect(run?.bestPromoted?.candidate).toBe('safe-v1')
+    expect(run?.fastestMeasured?.candidate).toBe('fast-but-unverified')
+  })
+
+  it('projects running candidates, their stages, and branched lineage without inventing results', () => {
+    const baseline = result()
+    const runningCall = {
+      callId: 'call-running',
+      name: 'kda_evaluate_candidate',
+      time: 4_000,
+      argsRaw: JSON.stringify({
+        optimizationRunId: 'run-a', task: 'fused-rmsnorm', objective: 'Reduce median latency',
+        candidate: 'branch-v2', candidateRole: 'experiment', parentCandidate: 'baseline',
+        hypothesis: 'Try a second branch.', changeSummary: 'Change the reduction layout.',
+      }),
+      subCalls: [
+        { kind: 'tool-result', call: { name: 'kda/correctness' }, isError: false },
+        { callId: 'benchmark-running', name: 'kda/benchmark' },
+      ],
+    }
+    const run = projectKdaRuns([node(baseline, 1)], [runningCall])[0]
+    expect(run?.runningCandidates).toHaveLength(1)
+    expect(run?.runningCandidates[0]).toMatchObject({ candidate: 'branch-v2', parentCandidate: 'baseline' })
+    expect(run?.runningCandidates[0]?.stages).toEqual([
+      { stage: 'correctness', status: 'passed' },
+      { stage: 'benchmark', status: 'running' },
+      { stage: 'profile', status: 'waiting' },
+    ])
+    expect(run?.lineageRows.map(row => [row.candidate, row.depth, row.state])).toEqual([
+      ['baseline', 0, 'settled'],
+      ['branch-v2', 1, 'running'],
+    ])
+    expect(run?.fastestMeasured).toBeUndefined()
+  })
+
+  it('shows a running-only run and ignores malformed running arguments', () => {
+    const valid = {
+      callId: 'call-running-only', name: 'kda_evaluate_candidate', time: 5_000, subCalls: [],
+      argsRaw: JSON.stringify({ optimizationRunId: 'run-live', candidate: 'baseline-live', candidateRole: 'baseline', task: 'live task' }),
+    }
+    const malformed = { ...valid, callId: 'bad', argsRaw: '{' }
+    const runs = projectKdaRuns([], [malformed, valid])
+    expect(runs).toHaveLength(1)
+    expect(runs[0]).toMatchObject({ runId: 'run-live', task: 'live task', evaluations: [] })
+    expect(runs[0]?.runningCandidates[0]?.candidate).toBe('baseline-live')
   })
 
   it('ignores unrelated tools and de-duplicates one evaluation id', () => {

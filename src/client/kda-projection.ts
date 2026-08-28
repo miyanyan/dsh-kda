@@ -216,15 +216,50 @@ export interface KdaEvaluationView {
   result: KdaResultView
 }
 
+export type KdaRunningStageStatusView = 'waiting' | 'running' | 'passed' | 'failed'
+
+export interface KdaRunningStageView {
+  stage: 'correctness' | 'benchmark' | 'profile'
+  status: KdaRunningStageStatusView
+}
+
+export interface KdaRunningCandidateView {
+  callId: string
+  runId: string
+  time: number
+  task?: string
+  objective?: string
+  candidate: string
+  candidateRole: 'baseline' | 'experiment'
+  parentCandidate?: string
+  hypothesis?: string
+  changeSummary?: string
+  stages: KdaRunningStageView[]
+}
+
+export interface KdaLineageRowView {
+  key: string
+  candidate: string
+  parentCandidate?: string
+  iteration?: number
+  depth: number
+  state: 'settled' | 'running'
+  candidateView?: KdaCandidateView
+  runningView?: KdaRunningCandidateView
+}
+
 export interface KdaRunView {
   runId: string
   task?: string
   objective?: string
   updatedAt: number
   evaluations: KdaEvaluationView[]
+  runningCandidates: KdaRunningCandidateView[]
   lineage: KdaCandidateView[]
+  lineageRows: KdaLineageRowView[]
   baseline?: KdaCandidateView
-  best?: KdaCandidateView
+  bestPromoted?: KdaCandidateView
+  fastestMeasured?: KdaCandidateView
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -565,14 +600,120 @@ function fallbackCandidate(evaluation: KdaEvaluationView, index: number): KdaCan
   }
 }
 
-function bestCandidate(lineage: readonly KdaCandidateView[]): KdaCandidateView | undefined {
-  return [...lineage]
-    .filter(candidate => candidate.candidateRole !== 'baseline' && candidate.candidateMetric !== undefined)
-    .sort((left, right) => (right.improvementPercent ?? Number.NEGATIVE_INFINITY) - (left.improvementPercent ?? Number.NEGATIVE_INFINITY))[0]
+function metricRank(candidate: KdaCandidateView): number {
+  if (candidate.candidateMetric === undefined) return Number.POSITIVE_INFINITY
+  return candidate.lowerIsBetter === false ? -candidate.candidateMetric : candidate.candidateMetric
 }
 
-/** Project ordinary conversation tool-result nodes into KDA optimization runs. */
-export function projectKdaRuns(nodes: readonly unknown[]): KdaRunView[] {
+function fastestCandidate(lineage: readonly KdaCandidateView[]): KdaCandidateView | undefined {
+  return [...lineage]
+    .filter(candidate => candidate.candidateRole !== 'baseline' && candidate.candidateMetric !== undefined)
+    .sort((left, right) => metricRank(left) - metricRank(right) || left.iteration - right.iteration)[0]
+}
+
+function bestPromotedCandidate(lineage: readonly KdaCandidateView[]): KdaCandidateView | undefined {
+  return fastestCandidate(lineage.filter(candidate => candidate.decision === 'promote'))
+}
+
+function runningToolName(value: unknown): string | undefined {
+  if (!isObject(value)) return undefined
+  if (typeof value.name === 'string') return value.name
+  const call = isObject(value.call) ? value.call : undefined
+  return typeof call?.name === 'string' ? call.name : undefined
+}
+
+function runningStageStatus(value: unknown): KdaRunningStageStatusView {
+  if (!isObject(value) || value.kind !== 'tool-result') return 'running'
+  return value.isError === true ? 'failed' : 'passed'
+}
+
+function parseRunningCandidate(item: unknown): KdaRunningCandidateView | undefined {
+  if (!isObject(item) || item.name !== 'kda_evaluate_candidate' || typeof item.callId !== 'string') return undefined
+  let args: unknown
+  try {
+    args = JSON.parse(typeof item.argsRaw === 'string' ? item.argsRaw : '')
+  } catch {
+    return undefined
+  }
+  if (!isObject(args) || typeof args.optimizationRunId !== 'string' || typeof args.candidate !== 'string') return undefined
+  const subCalls = Array.isArray(item.subCalls) ? item.subCalls : []
+  const stageStatus = new Map<KdaRunningStageView['stage'], KdaRunningStageStatusView>()
+  for (const subCall of subCalls) {
+    const name = runningToolName(subCall)
+    const stage = name === 'kda/correctness' ? 'correctness'
+      : name === 'kda/benchmark' ? 'benchmark'
+        : name === 'kda/profile' ? 'profile'
+          : undefined
+    if (stage !== undefined) stageStatus.set(stage, runningStageStatus(subCall))
+  }
+  return {
+    callId: item.callId,
+    runId: args.optimizationRunId,
+    time: typeof item.time === 'number' ? item.time : 0,
+    ...(typeof args.task === 'string' ? { task: args.task } : {}),
+    ...(typeof args.objective === 'string' ? { objective: args.objective } : {}),
+    candidate: args.candidate,
+    candidateRole: args.candidateRole === 'baseline' ? 'baseline' : 'experiment',
+    ...(typeof args.parentCandidate === 'string' ? { parentCandidate: args.parentCandidate } : {}),
+    ...(typeof args.hypothesis === 'string' ? { hypothesis: args.hypothesis } : {}),
+    ...(typeof args.changeSummary === 'string' ? { changeSummary: args.changeSummary } : {}),
+    stages: (['correctness', 'benchmark', 'profile'] as const).map(stage => ({ stage, status: stageStatus.get(stage) ?? 'waiting' })),
+  }
+}
+
+function lineageRows(lineage: readonly KdaCandidateView[], running: readonly KdaRunningCandidateView[]): KdaLineageRowView[] {
+  type RawLineageRow = Omit<KdaLineageRowView, 'depth'>
+  const rows: RawLineageRow[] = [
+    ...lineage.map(candidate => ({
+      key: `settled:${candidate.evaluationId ?? `${candidate.iteration}:${candidate.candidate}`}`,
+      candidate: candidate.candidate,
+      ...(candidate.parentCandidate !== undefined ? { parentCandidate: candidate.parentCandidate } : {}),
+      iteration: candidate.iteration,
+      state: 'settled' as const,
+      candidateView: candidate,
+    })),
+    ...running.map(candidate => ({
+      key: `running:${candidate.callId}`,
+      candidate: candidate.candidate,
+      ...(candidate.parentCandidate !== undefined ? { parentCandidate: candidate.parentCandidate } : {}),
+      state: 'running' as const,
+      runningView: candidate,
+    })),
+  ]
+  const candidateNames = new Set(rows.map(row => row.candidate))
+  const children = new Map<string, typeof rows>()
+  const roots: typeof rows = []
+  for (const row of rows) {
+    if (row.parentCandidate === undefined || !candidateNames.has(row.parentCandidate) || row.parentCandidate === row.candidate) {
+      roots.push(row)
+      continue
+    }
+    const siblings = children.get(row.parentCandidate) ?? []
+    siblings.push(row)
+    children.set(row.parentCandidate, siblings)
+  }
+  const order = (left: typeof rows[number], right: typeof rows[number]) =>
+    (left.iteration ?? Number.MAX_SAFE_INTEGER) - (right.iteration ?? Number.MAX_SAFE_INTEGER)
+    || left.candidate.localeCompare(right.candidate)
+  roots.sort(order)
+  for (const siblings of children.values()) siblings.sort(order)
+
+  const output: KdaLineageRowView[] = []
+  const visited = new Set<string>()
+  const visit = (row: typeof rows[number], depth: number) => {
+    if (visited.has(row.key)) return
+    visited.add(row.key)
+    output.push({ ...row, depth })
+    for (const child of children.get(row.candidate) ?? []) visit(child, depth + 1)
+  }
+  for (const root of roots) visit(root, 0)
+  // Cycles and duplicate candidate names degrade to additional roots instead of hiding data.
+  for (const row of rows.sort(order)) visit(row, 0)
+  return output
+}
+
+/** Project ordinary conversation tool-result nodes and live calls into KDA optimization runs. */
+export function projectKdaRuns(nodes: readonly unknown[], runningCalls: readonly unknown[] = []): KdaRunView[] {
   const evaluations: KdaEvaluationView[] = []
   const seen = new Set<string>()
   for (const item of nodes) {
@@ -598,27 +739,44 @@ export function projectKdaRuns(nodes: readonly unknown[]): KdaRunView[] {
     grouped.set(evaluation.result.runId, run)
   }
 
+  const groupedRunning = new Map<string, KdaRunningCandidateView[]>()
+  for (const item of runningCalls) {
+    const candidate = parseRunningCandidate(item)
+    if (candidate === undefined) continue
+    const run = groupedRunning.get(candidate.runId) ?? []
+    run.push(candidate)
+    groupedRunning.set(candidate.runId, run)
+  }
+
   const runs: KdaRunView[] = []
-  for (const [runId, runEvaluations] of grouped) {
+  const runIds = new Set([...grouped.keys(), ...groupedRunning.keys()])
+  for (const runId of runIds) {
+    const runEvaluations = grouped.get(runId) ?? []
+    const runningCandidates = (groupedRunning.get(runId) ?? []).sort((left, right) => left.time - right.time)
     runEvaluations.sort((left, right) =>
       (left.result.iteration ?? Number.MAX_SAFE_INTEGER) - (right.result.iteration ?? Number.MAX_SAFE_INTEGER)
       || left.time - right.time
       || left.seq - right.seq)
-    const latest = runEvaluations.at(-1) as KdaEvaluationView
-    const lineage = latest.result.candidates?.length
+    const latest = runEvaluations.at(-1)
+    const latestRunning = runningCandidates.at(-1)
+    const lineage = latest?.result.candidates?.length
       ? [...latest.result.candidates].sort((left, right) => left.iteration - right.iteration)
       : runEvaluations.map(fallbackCandidate)
     const baseline = lineage.find(candidate => candidate.candidateRole === 'baseline')
-    const best = bestCandidate(lineage)
+    const bestPromoted = bestPromotedCandidate(lineage)
+    const fastestMeasured = fastestCandidate(lineage)
     runs.push({
       runId,
-      ...(latest.result.task !== undefined ? { task: latest.result.task } : {}),
-      ...(latest.result.objective !== undefined ? { objective: latest.result.objective } : {}),
-      updatedAt: Math.max(...runEvaluations.map(item => item.time)),
+      ...(latest?.result.task !== undefined ? { task: latest.result.task } : latestRunning?.task !== undefined ? { task: latestRunning.task } : {}),
+      ...(latest?.result.objective !== undefined ? { objective: latest.result.objective } : latestRunning?.objective !== undefined ? { objective: latestRunning.objective } : {}),
+      updatedAt: Math.max(0, ...runEvaluations.map(item => item.time), ...runningCandidates.map(item => item.time)),
       evaluations: runEvaluations,
+      runningCandidates,
       lineage,
+      lineageRows: lineageRows(lineage, runningCandidates),
       ...(baseline !== undefined ? { baseline } : {}),
-      ...(best !== undefined ? { best } : {}),
+      ...(bestPromoted !== undefined ? { bestPromoted } : {}),
+      ...(fastestMeasured !== undefined ? { fastestMeasured } : {}),
     })
   }
   return runs.sort((left, right) => right.updatedAt - left.updatedAt)
