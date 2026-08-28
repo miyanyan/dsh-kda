@@ -42,7 +42,10 @@
     "clean": "node scripts/clean.mjs",
     "typecheck": "tsc -p tsconfig.host.json --noEmit && tsc -p tsconfig.client.json --noEmit",
     "test": "vitest run",
-    "prepare": "pnpm run build"
+    "verify": "pnpm run typecheck && pnpm run test && pnpm run build",
+    "pack:check": "node scripts/check-package.mjs",
+    "release:check": "node scripts/check-release-tag.mjs",
+    "prepack": "pnpm run verify"
   },
   "keywords": [
     "dsh-plugin",
@@ -50,6 +53,14 @@
     "kernel-optimization",
     "agent"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/miyanyan/dsh-kda.git"
+  },
+  "bugs": {
+    "url": "https://github.com/miyanyan/dsh-kda/issues"
+  },
+  "homepage": "https://github.com/miyanyan/dsh-kda#readme",
   "license": "MIT",
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",

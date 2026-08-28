@@ -2,6 +2,7 @@ node_modules/
 lib/
 coverage/
 *.tgz
+artifacts/
 __pycache__/
 *.pyc
 .dsh-kda/
