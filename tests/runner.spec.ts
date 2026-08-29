@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { evaluateCandidate, parseMetric } from '../src/runner.js'
 import type { KdaCommandResult, KdaCommandRunner, KdaEvaluationRequest, KdaStageName } from '../src/types.js'
-import { ncuAssessmentJson } from './fixtures.js'
+import { ncuAssessment } from './fixtures.js'
 
 function result(stdout: string, exitCode = 0): KdaCommandResult {
   return {
@@ -44,7 +44,7 @@ const baselineRequest: KdaEvaluationRequest = {
 async function measuredBaseline(profile = false) {
   return evaluateCandidate({
     ...baselineRequest,
-    ...(profile ? { profileCommand: 'profile', profileContext: 'wsl-rtx5070ti-ncu2026-shape-1m', ncuReportAssessmentJson: ncuAssessmentJson() } : {}),
+    ...(profile ? { profileCommand: 'profile', profileContext: 'wsl-rtx5070ti-ncu2026-shape-1m', ncuReportAssessment: ncuAssessment() } : {}),
   }, runner({
     correctness: result('ok'),
     benchmark: result('KDA_METRIC=10'),
@@ -104,7 +104,7 @@ describe('evaluateCandidate', () => {
       expectedProfileMetric: 'compute-throughput',
       expectedProfileDirection: 'increase',
       expectedProfileMinimumChangePercent: 10,
-      ncuReportAssessmentJson: ncuAssessmentJson(),
+      ncuReportAssessment: ncuAssessment(),
     }, runner({
       correctness: result('ok'),
       benchmark: result('KDA_METRIC=8.5'),
@@ -138,7 +138,7 @@ describe('evaluateCandidate', () => {
       profileContext: 'different-wsl-context',
       expectedProfileMetric: 'compute-throughput',
       expectedProfileDirection: 'increase',
-      ncuReportAssessmentJson: ncuAssessmentJson(),
+      ncuReportAssessment: ncuAssessment(),
     }, runner({
       correctness: result('ok'),
       benchmark: result('KDA_METRIC=8.5'),
@@ -158,7 +158,7 @@ describe('evaluateCandidate', () => {
       ...experiment(baseline.candidates),
       profileCommand: 'profile',
       profileContext: 'wsl-rtx5070ti-ncu2026-shape-1m',
-      ncuReportAssessmentJson: ncuAssessmentJson(),
+      ncuReportAssessment: ncuAssessment(),
     }, runner({
       correctness: result('ok'),
       benchmark: result('KDA_METRIC=8'),
@@ -180,7 +180,7 @@ describe('evaluateCandidate', () => {
       expectedProfileDirection: 'increase',
       expectedProfileMinimumChangePercent: 5,
       requireMechanismForPromotion: true,
-      ncuReportAssessmentJson: ncuAssessmentJson(),
+      ncuReportAssessment: ncuAssessment(),
     }, runner({
       correctness: result('ok'),
       benchmark: result('KDA_METRIC=8'),
@@ -205,7 +205,7 @@ describe('evaluateCandidate', () => {
       ...baselineRequest,
       profileCommand: 'profile',
       profileContext: 'wsl-rtx5070ti-ncu2026-shape-1m',
-      ncuReportAssessmentJson: ncuAssessmentJson(),
+      ncuReportAssessment: ncuAssessment(),
     }, runner({
       correctness: result('ok'),
       benchmark: result('benchmark failed', 1),
@@ -220,7 +220,7 @@ describe('evaluateCandidate', () => {
       ...baselineRequest,
       profileCommand: 'profile',
       profileContext: 'wsl-rtx5070ti-ncu2026-shape-1m',
-    }, runner({ correctness: result('should not run') }))).rejects.toThrow('ncuReportAssessmentJson is required')
+    }, runner({ correctness: result('should not run') }))).rejects.toThrow('validated original NCU assessment is required')
   })
 
   it('rejects a first candidate that is not an explicit baseline', async () => {

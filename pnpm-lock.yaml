@@ -27,6 +27,9 @@ importers:
       '@deepseek-ai/dsh-client-ui-slots':
         specifier: 0.1.0-rc.8
         version: 0.1.0-rc.8(@deepseek-ai/cordis@4.0.1)
+      '@deepseek-ai/dsh-sandbox-policy':
+        specifier: 0.1.0-rc.8
+        version: 0.1.0-rc.8(@deepseek-ai/cordis@4.0.1)
       '@deepseek-ai/dsh-shell':
         specifier: 0.1.0-rc.8
         version: 0.1.0-rc.8(@deepseek-ai/cordis@4.0.1)
@@ -129,6 +132,16 @@ packages:
     peerDependencies:
       '@deepseek-ai/cordis': ^4.0.1
       '@deepseek-ai/dsh-invariants': ^0.1.0-rc.8
+
+  '@deepseek-ai/dsh-sandbox-policy@0.1.0-rc.8':
+    resolution: {integrity: sha512-xQOlYWbUr1Oj6cnRd5aHZIz52EOEAdSO1HJIfeDkQrVaOgohFsiiCIp6PNFumuGNWdCEnf4Q18ebafLNtazYlA==}
+    peerDependencies:
+      '@deepseek-ai/cordis': ^4.0.1
+      '@deepseek-ai/dsh-agent': ^0.1.0-rc.8
+      '@deepseek-ai/dsh-invariants': ^0.1.0-rc.8
+      '@deepseek-ai/dsh-sandbox': ^0.1.0-rc.8
+      '@deepseek-ai/dsh-session': ^0.1.0-rc.8
+      '@deepseek-ai/dsh-system-prompt': ^0.1.0-rc.8
 
   '@deepseek-ai/dsh-shell@0.1.0-rc.8':
     resolution: {integrity: sha512-RNhp7Y25DXUH7o36X4GcN0lnOLg6NXTlWZpYNURT7aDj3UHcLLajRsyddiAh1EbwQnl0GRKRZhLaZHrrG6gMIw==}
@@ -810,6 +823,11 @@ snapshots:
   '@deepseek-ai/dsh-client-ui-slots@0.1.0-rc.8(@deepseek-ai/cordis@4.0.1)':
     dependencies:
       '@deepseek-ai/cordis': 4.0.1
+
+  '@deepseek-ai/dsh-sandbox-policy@0.1.0-rc.8(@deepseek-ai/cordis@4.0.1)':
+    dependencies:
+      '@deepseek-ai/cordis': 4.0.1
+      '@deepseek-ai/schemastery': 3.18.1
 
   '@deepseek-ai/dsh-shell@0.1.0-rc.8(@deepseek-ai/cordis@4.0.1)':
     dependencies:

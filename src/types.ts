@@ -249,7 +249,7 @@ export interface KdaEvaluationRequest {
   expectedProfileMetric?: string
   expectedProfileDirection?: KdaExpectedProfileDirection
   expectedProfileMinimumChangePercent?: number
-  ncuReportAssessmentJson?: string
+  ncuReportAssessment?: KdaNcuReportAssessment
   previousCandidates?: readonly KdaCandidateSummary[]
 }
 

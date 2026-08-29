@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { validateCandidateLineage } from './history.js'
 import { analyzeNcuOutput, compareNcuProfiles, withNcuComparison } from './ncu.js'
-import { parseNcuReportAssessmentJson } from './ncu-report.js'
 import type {
   KdaCandidateSummary,
   KdaCommandRunner,
@@ -78,9 +77,11 @@ export function validateEvaluationRequest(request: KdaEvaluationRequest): void {
   if (request.profileCommand !== undefined && request.profileContext === undefined) {
     throw new Error('profileContext is required when profileCommand is provided')
   }
-  const ncuReportAssessment = parseNcuReportAssessmentJson(request.ncuReportAssessmentJson)
-  if (request.profileCommand !== undefined && ncuReportAssessment === undefined) {
-    throw new Error('ncuReportAssessmentJson is required when profileCommand is provided; run the bundled original ncu-report-skill workflow first')
+  if (request.profileCommand !== undefined && request.ncuReportAssessment === undefined) {
+    throw new Error('a validated original NCU assessment is required when profileCommand is provided; run the bundled original ncu-report-skill workflow first')
+  }
+  if (request.profileCommand === undefined && request.ncuReportAssessment !== undefined) {
+    throw new Error('an original NCU assessment requires profileCommand')
   }
   if (request.metricPattern !== undefined) {
     try {
@@ -466,7 +467,7 @@ export async function evaluateCandidate(
   observer?: KdaTrajectoryObserver,
 ): Promise<KdaEvaluationResult> {
   validateEvaluationRequest(request)
-  const ncuReportAssessment = parseNcuReportAssessmentJson(request.ncuReportAssessmentJson)
+  const ncuReportAssessment = request.ncuReportAssessment
   const runId = request.optimizationRunId
   const evaluationId = randomUUID()
   const previousCandidates = [...(request.previousCandidates ?? [])]

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { KdaNativeTrajectoryRecorder } from '../src/native-trajectory.js'
 import { evaluateCandidate } from '../src/runner.js'
 import type { KdaCommandResult, KdaCommandRunner } from '../src/types.js'
-import { ncuAssessmentJson } from './fixtures.js'
+import { ncuAssessment } from './fixtures.js'
 
 interface AppendedEvent {
   type: string
@@ -117,7 +117,7 @@ describe('KdaNativeTrajectoryRecorder', () => {
       profileCommand: 'profile',
       profileContext: 'rtx5070ti-ncu2026-shape-a',
       profileArtifact: 'baseline.ncu-rep',
-      ncuReportAssessmentJson: ncuAssessmentJson(),
+      ncuReportAssessment: ncuAssessment(),
     }, commandRunner(), undefined, native.observe)
 
     const starts = events.filter(event => event.type === 'tool/code-dispatch-start')

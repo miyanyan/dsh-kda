@@ -11,14 +11,14 @@ import {
   type KdaResultView as ResultView,
 } from './kda-projection.js'
 
-interface KdaTextBlock {
+export interface KdaTextBlock {
   type: string
   text?: string
 }
 
-type KdaToolBlock =
+export type KdaToolBlock =
   | { argsRaw: string }
-  | { kind: 'tool-result'; content: readonly KdaTextBlock[]; meta?: unknown }
+  | { kind: 'tool-result'; content: readonly KdaTextBlock[]; meta?: unknown; isError?: boolean }
 
 interface KdaToolCallOwnerProps {
   callId: string
@@ -55,6 +55,15 @@ function parseResult(block: ToolCallViewProps['block']): ResultView | undefined 
   return parseKdaResult(block.meta, block.content)
 }
 
+export function kdaToolFailure(block: KdaToolBlock): string | undefined {
+  if (!('kind' in block) || block.isError !== true) return undefined
+  const message = block.content
+    .map(item => item.text?.trim())
+    .filter((item): item is string => item !== undefined && item !== '')
+    .join('\n')
+  return message || 'KDA evaluation failed without an error message.'
+}
+
 function metric(candidate: CandidateView): string {
   if (candidate.candidateMetric === undefined) return 'no metric'
   return `${candidate.candidateMetric}${candidate.metricUnit === undefined ? '' : ` ${candidate.metricUnit}`}`
@@ -66,12 +75,15 @@ export function KdaToolRow({ block, inspect }: ToolCallViewProps) {
   const result = parseResult(block)
   if (result === undefined) {
     const running = !('kind' in block)
+    const failure = kdaToolFailure(block)
     return (
       <div style={cardStyle}>
         <div style={{ padding: '9px 12px', display: 'flex', gap: 8, alignItems: 'center' }}>
-          <span style={{ color: color.running }}>●</span>
+          <span style={{ color: failure === undefined ? color.running : color.reject }}>●</span>
           <strong>KDA</strong>
-          <span style={{ opacity: 0.7 }}>{running ? 'Evaluating candidate…' : 'Result unavailable'}</span>
+          <span style={{ opacity: 0.7 }}>{running ? 'Evaluating candidate…' : failure === undefined ? 'Invalid KDA result' : 'Evaluation failed'}</span>
+          {failure !== undefined && <code style={{ color: color.reject, marginLeft: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{failure}</code>}
+          {failure !== undefined && inspect !== undefined && <button type="button" onClick={inspect} style={{ marginLeft: 'auto' }}>Inspect</button>}
         </div>
       </div>
     )

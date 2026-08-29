@@ -1,7 +1,17 @@
 # Original NCU report assessment contract
 
 Create this JSON only after completing the bundled `ncu-report-skill` workflow and writing `REPORT.md`.
-Pass its serialized form as `ncuReportAssessmentJson` to `kda_evaluate_candidate`.
+Save it as a sidecar file. Pass a sandboxed `ncuReportAssessmentCommand` to `kda_evaluate_candidate` that prints exactly this file and no logging or decoration. For example:
+
+```text
+Get-Content -Raw profile/run/ncu-assessment.json
+```
+
+or, when the evidence is in WSL:
+
+```text
+wsl.exe -- bash -lc "cat /path/to/profile/run/ncu-assessment.json"
+```
 
 Rules:
 

@@ -4,14 +4,16 @@ import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import type {} from '@deepseek-ai/dsh-sandbox-policy'
 import type {} from '@deepseek-ai/dsh-shell'
 import { collectCandidateHistory } from './history.js'
 import { KdaNativeTrajectoryRecorder } from './native-trajectory.js'
+import { parseNcuReportAssessmentJson } from './ncu-report.js'
 import { evaluateCandidate } from './runner.js'
-import type { KdaCommandResult, KdaEvaluationRequest, KdaStageName } from './types.js'
+import type { KdaCommandResult, KdaEvaluationRequest, KdaNcuReportAssessment, KdaStageName } from './types.js'
 
 export const name = 'kda'
-export const inject = ['tools', 'shell', 'skills']
+export const inject = ['tools', 'shell', 'skills', 'sandboxPolicy']
 
 function bundledSkill(relativePath: string): { path: string; content: string } {
   const path = fileURLToPath(new URL(relativePath, import.meta.url))
@@ -25,8 +27,8 @@ const ncuReportSkill = bundledSkill('../skills/ncu-report-skill/SKILL.md')
 const recorderSkill = bundledSkill('../skills/kda/SKILL.md')
 const ncuReportDescription = 'Profile CUDA kernels with Nsight Compute on B200 / sm_100. Use when the user asks to profile a kernel, analyze its performance, diagnose bottlenecks, read an ncu report, or write an optimization plan.'
 const ncuReportWhenToUse = 'Use for CUDA kernel profiling, bottleneck diagnosis, NCU report analysis, and evidence-ranked optimization planning, including “profile 一下”, “为什么慢”, “ncu 报告”, and “下一步怎么优化”.'
-const recorderDescription = 'Record a completed kernel candidate evaluation as a durable KDA semantic trajectory without replacing the original ncu-report-skill diagnosis.'
-const recorderWhenToUse = 'Use after the ncu-report-skill workflow has collected and analyzed evidence, when correctness, benchmark, profiler artifact, candidate lineage, and the final mechanism expectation should be recorded in the KDA view.'
+const recorderDescription = 'Drive and record a CUDA optimization run one candidate at a time in the durable KDA semantic trajectory without replacing the original ncu-report-skill diagnosis.'
+const recorderWhenToUse = 'Use from the start whenever the user asks to use KDA or to optimize a CUDA kernel with a visible evidence-backed trajectory. Record the baseline before the first optimization and record every completed candidate before starting the next change.'
 
 /** Deployment limits for KDA evidence commands. */
 export interface Config {
@@ -68,7 +70,7 @@ interface KdaToolArgs {
   expectedProfileMetric?: string
   expectedProfileDirection?: 'increase' | 'decrease' | 'stable'
   expectedProfileMinimumChangePercent?: number
-  ncuReportAssessmentJson?: string
+  ncuReportAssessmentCommand?: string
 }
 
 interface KdaSkillRegistry {
@@ -124,7 +126,8 @@ export function apply(ctx: Context, config: Config = {}): void {
     description: 'Evaluate one implemented CUDA kernel candidate inside a persistent Kernel Design Agents optimization run. '
       + 'Reconstructs prior candidates from the durable dsh session, runs correctness first, then benchmark and optional NCU profiling, '
       + 'and returns a replayable candidate graph with a separate performance decision and profiler-backed mechanism verdict. '
-      + 'Record the unmodified implementation first with candidateRole=baseline, then reuse optimizationRunId and parentCandidate. '
+      + 'Call this once for every implemented candidate before making the next source change. Record the unmodified implementation first '
+      + 'with candidateRole=baseline, then reuse optimizationRunId and parentCandidate. '
       + 'Benchmark stdout should contain KDA_METRIC=<number> unless metricPattern is provided.',
     parameters: {
       optimizationRunId: { type: 'string', required: true, description: 'Stable id shared by every candidate in this optimization run.' },
@@ -152,7 +155,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       expectedProfileMetric: { type: 'string', description: 'Canonical metric key or exact NCU metric name expected to change, for example compute-throughput.' },
       expectedProfileDirection: { type: 'string', enum: ['increase', 'decrease', 'stable'], description: 'Expected direction for expectedProfileMetric.' },
       expectedProfileMinimumChangePercent: { type: 'number', description: 'Minimum absolute percentage change used to verify the expected profiler direction; defaults to 1.' },
-      ncuReportAssessmentJson: { type: 'string', description: 'Required with profileCommand. JSON sidecar derived from the bundled original ncu-report-skill REPORT.md, including the complete reportMarkdown text, all six dimensions, matched playbook patterns, NCU rules, primary diagnosis, and ranked recommendations. Follow skills/kda/references/ncu-assessment-schema.md exactly.' },
+      ncuReportAssessmentCommand: { type: 'string', description: 'Required with profileCommand. A sandboxed command that prints exactly one JSON sidecar derived from the bundled original ncu-report-skill REPORT.md. Prefer reading the sidecar file directly, for example Get-Content -Raw profile/run/ncu-assessment.json or cat profile/run/ncu-assessment.json. Follow skills/kda/references/ncu-assessment-schema.md exactly.' },
     },
     output: {
       schema: { type: 'string' },
@@ -166,11 +169,61 @@ export function apply(ctx: Context, config: Config = {}): void {
       },
     },
     async execute(args: KdaToolArgs, exec) {
+      const session = exec.agent?.session
+      const sandboxPolicy = ctx.sandboxPolicy.resolve(session === undefined ? undefined : { session })
       const workdir = resolveWorkdir(args.workdir, exec.agent?.session.header.cwd)
       const previousCandidates = collectCandidateHistory(
         exec.agent?.session.events ?? [],
         args.optimizationRunId,
       )
+      const runCommand = async (command: string, commandWorkdir: string, signal?: AbortSignal): Promise<KdaCommandResult> => {
+        const result = await ctx.shell.run(ctx.shell.resolve({
+          command,
+          workdir: commandWorkdir,
+          timeoutMs,
+          stdoutMaxBytes: outputMaxBytes,
+          sandboxPolicy,
+          ...(signal !== undefined ? { signal } : {}),
+        }))
+        return {
+          exitCode: result.exitCode,
+          signal: result.signal,
+          timedOut: result.timedOut,
+          aborted: result.aborted,
+          stdout: {
+            text: result.stdout.text,
+            truncated: result.stdout.truncated,
+            ...(result.stdout.spillPath !== undefined ? { spillPath: result.stdout.spillPath } : {}),
+          },
+          stderr: {
+            text: result.stderr.text,
+            truncated: result.stderr.truncated,
+            ...(result.stderr.spillPath !== undefined ? { spillPath: result.stderr.spillPath } : {}),
+          },
+        }
+      }
+      let ncuReportAssessment: KdaNcuReportAssessment | undefined
+      if (args.profileCommand === undefined && args.ncuReportAssessmentCommand !== undefined) {
+        throw new Error('ncuReportAssessmentCommand requires profileCommand')
+      }
+      if (args.profileCommand !== undefined) {
+        if (args.ncuReportAssessmentCommand === undefined) {
+          throw new Error('ncuReportAssessmentCommand is required with profileCommand; write the original ncu-report-skill assessment sidecar first')
+        }
+        const assessmentResult = await runCommand(args.ncuReportAssessmentCommand, workdir, exec.signal)
+        if (assessmentResult.exitCode !== 0 || assessmentResult.timedOut || assessmentResult.aborted) {
+          const detail = assessmentResult.stderr.text.trim() || assessmentResult.stdout.text.trim() || 'no command output'
+          throw new Error(`ncuReportAssessmentCommand failed (exit ${assessmentResult.exitCode ?? 'signal'}): ${detail.slice(0, 2_000)}`)
+        }
+        if (assessmentResult.stdout.truncated) {
+          throw new Error('ncuReportAssessmentCommand output was truncated; increase outputMaxBytes or reduce the embedded REPORT.md size')
+        }
+        try {
+          ncuReportAssessment = parseNcuReportAssessmentJson(assessmentResult.stdout.text)
+        } catch (error) {
+          throw new Error(`ncuReportAssessmentCommand produced an invalid sidecar: ${error instanceof Error ? error.message : String(error)}`)
+        }
+      }
       const request: KdaEvaluationRequest = {
         optimizationRunId: args.optimizationRunId,
         task: args.task,
@@ -199,34 +252,12 @@ export function apply(ctx: Context, config: Config = {}): void {
         ...(args.expectedProfileMinimumChangePercent !== undefined
           ? { expectedProfileMinimumChangePercent: args.expectedProfileMinimumChangePercent }
           : {}),
-        ...(args.ncuReportAssessmentJson !== undefined ? { ncuReportAssessmentJson: args.ncuReportAssessmentJson } : {}),
+        ...(ncuReportAssessment !== undefined ? { ncuReportAssessment } : {}),
         previousCandidates,
       }
       const runner = {
         async run(_stage: KdaStageName, command: string, commandWorkdir: string, signal?: AbortSignal): Promise<KdaCommandResult> {
-          const result = await ctx.shell.run(ctx.shell.resolve({
-            command,
-            workdir: commandWorkdir,
-            timeoutMs,
-            stdoutMaxBytes: outputMaxBytes,
-            ...(signal !== undefined ? { signal } : {}),
-          }))
-          return {
-            exitCode: result.exitCode,
-            signal: result.signal,
-            timedOut: result.timedOut,
-            aborted: result.aborted,
-            stdout: {
-              text: result.stdout.text,
-              truncated: result.stdout.truncated,
-              ...(result.stdout.spillPath !== undefined ? { spillPath: result.stdout.spillPath } : {}),
-            },
-            stderr: {
-              text: result.stderr.text,
-              truncated: result.stderr.truncated,
-              ...(result.stderr.spillPath !== undefined ? { spillPath: result.stderr.spillPath } : {}),
-            },
-          }
+          return runCommand(command, commandWorkdir, signal)
         },
       }
       const nativeTrajectory = new KdaNativeTrajectoryRecorder(exec)

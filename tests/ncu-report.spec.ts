@@ -16,7 +16,7 @@ describe('original ncu-report-skill assessment', () => {
   it('rejects missing dimensions instead of inventing coverage', () => {
     const value = ncuAssessment()
     value.dimensions = value.dimensions.slice(0, 5)
-    expect(() => parseNcuReportAssessmentJson(JSON.stringify(value))).toThrow('six original analysis dimensions')
+    expect(() => parseNcuReportAssessmentJson(JSON.stringify(value))).toThrow('missing=[memory]')
   })
 
   it('rejects assessments attributed to another skill revision', () => {

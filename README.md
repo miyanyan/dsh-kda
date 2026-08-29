@@ -86,6 +86,10 @@ baseline. Every later candidate names a parent and reuses the baseline's benchma
 The model never supplies the baseline metric. KDA measures it in the first benchmark and restores
 it from durable session history for later candidates.
 
+Start KDA before the first optimization. Record the baseline, then record every implemented
+candidate before making the next source change. KDA does not accept a bulk history supplied by the
+model; lineage is reconstructed only from durable prior evaluator results in the same session.
+
 <details>
 <summary>Baseline request</summary>
 
@@ -105,7 +109,7 @@ it from durable session history for later candidates.
   "profileCommand": "python tools/export_ncu.py profile/baseline.ncu-rep",
   "profileContext": "b200-ncu2026-full-shape128x4096-kernel-rmsnorm",
   "profileArtifact": "profile/baseline.ncu-rep",
-  "ncuReportAssessmentJson": "<serialized original-report sidecar>",
+  "ncuReportAssessmentCommand": "Get-Content -Raw profile/baseline/ncu-assessment.json",
   "metricUnit": "us",
   "lowerIsBetter": true,
   "minimumImprovementPercent": 5
@@ -135,7 +139,7 @@ it from durable session history for later candidates.
   "profileCommand": "python tools/export_ncu.py profile/vectorized-load-v1.ncu-rep",
   "profileContext": "b200-ncu2026-full-shape128x4096-kernel-rmsnorm",
   "profileArtifact": "profile/vectorized-load-v1.ncu-rep",
-  "ncuReportAssessmentJson": "<serialized original-report sidecar>",
+  "ncuReportAssessmentCommand": "Get-Content -Raw profile/vectorized-load-v1/ncu-assessment.json",
   "metricUnit": "us",
   "lowerIsBetter": true,
   "minimumImprovementPercent": 5,
@@ -184,11 +188,13 @@ dimensions, matches the diagnosis playbook, and writes ranked recommendations to
 six dimensions are launch and occupancy, workload balance, stall hotspots, tensor core use,
 timeline behavior, and memory behavior.
 
-The separate `kda-recorder` skill maps a completed report into the KDA trajectory. It does not
-replace or reinterpret the original report. When `profileCommand` is present,
-`ncuReportAssessmentJson` is required and must follow
+The separate `kda-recorder` skill drives the candidate loop from the measured baseline and maps
+each completed report into the KDA trajectory before the next source change. It does not replace or
+reinterpret the original report. When `profileCommand` is present, `ncuReportAssessmentCommand`
+must print a sidecar that follows
 [`skills/kda/references/ncu-assessment-schema.md`](skills/kda/references/ncu-assessment-schema.md).
-Its `reportMarkdown` field stores the complete report so the detail view survives session recovery.
+The command runs under the calling session's sandbox policy. Its `reportMarkdown` field stores the
+complete report so the detail view survives session recovery.
 
 KDA also creates a compact metric overview for presentation. That classifier is explicitly marked
 as non-authoritative when the original report is missing.

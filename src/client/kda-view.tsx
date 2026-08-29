@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import {
   projectKdaRuns,
+  type KdaCandidateView,
   type KdaDecisionGateView,
   type KdaDecisionView,
   type KdaEvaluationView,
@@ -680,7 +681,7 @@ function CandidateLedger({ evaluation, latest, navigation }: { evaluation: KdaEv
             result={<ResultText tone={color.revise}>no report</ResultText>}
             dataKind="ncu-overview-heuristic"
           >
-            <div style={{ color: color.revise, fontSize: 11 }}>This compact overview is not an original skill decision. Re-run the candidate with a schema-v1 ncuReportAssessmentJson sidecar.</div>
+            <div style={{ color: color.revise, fontSize: 11 }}>This compact overview is not an original skill decision. Re-run the candidate with a validated original NCU assessment sidecar.</div>
           </EvidenceNode>
         ) : <NcuReportNodes assessment={ncuReport} latest={latest} onOpenReport={() => setReportOpen(true)} />}
         <EvidenceNode
@@ -774,11 +775,30 @@ function RunningCandidateLedger({ candidate, navigation }: { candidate: KdaRunni
   )
 }
 
+function RecoveredCandidateLedger({ candidate }: { candidate: KdaCandidateView }) {
+  return (
+    <div style={{ borderBottom: border, padding: '10px 12px' }} data-kda-recovered-candidate={candidate.candidate}>
+      <div style={{ alignItems: 'center', display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+        <span aria-hidden="true" style={{ color: decisionColor[candidate.decision] }}>●</span>
+        <strong>{candidate.candidate}</strong>
+        {candidate.parentCandidate !== undefined && <span style={{ fontSize: 11, opacity: 0.5 }}>← {candidate.parentCandidate}</span>}
+        <Tag tone={decisionColor[candidate.decision]}>{candidate.decision}</Tag>
+        <ResultText>{metricText(candidate.candidateMetric, candidate.metricUnit)}</ResultText>
+      </div>
+      {candidate.changeSummary !== undefined && <div style={{ fontSize: 11, marginTop: 7 }}><strong>{candidate.changeSummary}</strong></div>}
+      <div style={{ fontSize: 11, marginTop: 3, opacity: 0.62 }}>{candidate.hypothesis}</div>
+      <div style={{ color: color.revise, fontSize: 10, marginTop: 7 }}>Candidate summary recovered from the latest durable result. Load earlier session history to inspect its complete stages and original call.</div>
+    </div>
+  )
+}
+
 function RunLedger({ run, latest, navigation }: { run: KdaRunView; latest: boolean; navigation: KdaViewNavigation }) {
   const best = run.bestPromoted
   const fastest = run.fastestMeasured
   const latestResult = run.evaluations.at(-1)?.result
   const fastestIsBest = fastest !== undefined && fastest.candidate === best?.candidate
+  const evaluationsById = new Map(run.evaluations.map(evaluation => [evaluation.result.evaluationId, evaluation]))
+  const evaluationsByCandidate = new Map(run.evaluations.map(evaluation => [evaluation.result.candidate, evaluation]))
   return (
     <details open={latest} style={{ border, borderRadius: 7, overflow: 'hidden' }} data-kda-run={run.runId}>
       <summary style={{ alignItems: 'center', cursor: 'pointer', display: 'flex', flexWrap: 'wrap', gap: 12, listStyle: 'none', minHeight: 48, padding: '7px 12px' }}>
@@ -796,7 +816,14 @@ function RunLedger({ run, latest, navigation }: { run: KdaRunView; latest: boole
       </summary>
       <LineageTree run={run} />
       {run.objective !== undefined && <div style={{ borderBottom: border, fontSize: 11, opacity: 0.6, padding: '7px 12px' }}><strong>Contract</strong> · {run.objective}</div>}
-      {run.evaluations.map((evaluation, index) => <CandidateLedger key={evaluation.id} evaluation={evaluation} latest={run.runningCandidates.length === 0 && index === run.evaluations.length - 1} navigation={navigation} />)}
+      {run.lineage.map((candidate, index) => {
+        const evaluation = candidate.evaluationId === undefined
+          ? evaluationsByCandidate.get(candidate.candidate)
+          : evaluationsById.get(candidate.evaluationId)
+        return evaluation === undefined
+          ? <RecoveredCandidateLedger key={`recovered:${candidate.iteration}:${candidate.candidate}`} candidate={candidate} />
+          : <CandidateLedger key={evaluation.id} evaluation={evaluation} latest={run.runningCandidates.length === 0 && index === run.lineage.length - 1} navigation={navigation} />
+      })}
       {run.runningCandidates.map(candidate => <RunningCandidateLedger key={candidate.callId} candidate={candidate} navigation={navigation} />)}
     </details>
   )
@@ -814,8 +841,8 @@ export function KdaView({ useSession, openCall, inspectCall }: ConvViewProps & K
     // A newly selected view may render once before its Session snapshot is ready.
   }
   const runs = useMemo(() => projectKdaRuns(nodes, runningCalls), [nodes, runningCalls])
-  const candidateCount = runs.reduce((sum, run) => sum + run.evaluations.length + run.runningCandidates.length, 0)
-  const promotedCount = runs.reduce((sum, run) => sum + run.evaluations.filter(item => item.result.decision === 'promote').length, 0)
+  const candidateCount = runs.reduce((sum, run) => sum + run.lineageRows.length, 0)
+  const promotedCount = runs.reduce((sum, run) => sum + run.lineage.filter(candidate => candidate.decision === 'promote').length, 0)
   const runningCount = runs.reduce((sum, run) => sum + run.runningCandidates.length, 0)
   const navigation = useMemo(() => ({ openCall, inspectCall }), [openCall, inspectCall])
 
