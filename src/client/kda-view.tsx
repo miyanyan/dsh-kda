@@ -139,6 +139,10 @@ function ActionButton({ children, disabled = false, onClick }: { children: React
   return <button type="button" disabled={disabled} onClick={onClick} style={{ background: 'transparent', border, borderRadius: 5, color: 'inherit', cursor: disabled ? 'wait' : 'pointer', fontSize: 11, opacity: disabled ? 0.58 : 1, padding: '5px 8px' }}>{children}</button>
 }
 
+function PrimaryActionButton({ children, onClick }: { children: ReactNode; onClick: () => void }) {
+  return <button type="button" onClick={onClick} style={{ background: color.profile, border: 0, borderRadius: 5, color: 'white', cursor: 'pointer', fontSize: 11, fontWeight: 700, padding: '6px 9px' }}>{children}</button>
+}
+
 interface EvidenceNodeProps {
   label: string
   tone: string
@@ -240,7 +244,7 @@ const drawerTabs: Array<{ id: NcuDrawerTab; label: string }> = [
   { id: 'dimensions', label: 'Six dimensions' },
   { id: 'metrics', label: 'All metrics' },
   { id: 'decisions', label: 'Rules & plan' },
-  { id: 'raw', label: 'Raw report' },
+  { id: 'raw', label: 'Report source' },
 ]
 
 function NcuMetricTable({ metrics }: { metrics: readonly KdaMetricView[] }) {
@@ -375,6 +379,7 @@ function NcuReportDrawer({ assessment, candidate, profile, profileStage, onClose
           )}
           {tab === 'raw' && (
             <div style={{ display: 'grid', gap: 14 }}>
+              <div style={{ fontSize: 10, opacity: 0.55 }}>Processed REPORT.md and captured profiler output. Binary .ncu-rep artifacts are referenced but not loaded here.</div>
               <section><strong style={{ display: 'block', marginBottom: 7 }}>REPORT.md</strong><pre style={{ ...mono, border, borderRadius: 7, fontSize: 11, lineHeight: 1.55, margin: 0, overflow: 'auto', padding: 12, whiteSpace: 'pre-wrap' }}>{assessment.reportMarkdown}</pre></section>
               <section><strong style={{ display: 'block', marginBottom: 7 }}>Profiler command output</strong><pre style={{ ...mono, border, borderRadius: 7, fontSize: 10, margin: 0, maxHeight: 300, overflow: 'auto', padding: 12, whiteSpace: 'pre-wrap' }}>{profileStage?.stdout?.text ?? 'No captured stdout.'}</pre>{profileStage?.stderr?.text !== undefined && profileStage.stderr.text.trim() !== '' && <pre style={{ ...mono, border, borderRadius: 7, color: color.reject, fontSize: 10, marginTop: 8, maxHeight: 220, overflow: 'auto', padding: 12, whiteSpace: 'pre-wrap' }}>{profileStage.stderr.text}</pre>}</section>
             </div>
@@ -556,7 +561,7 @@ function NcuReportNodes({ assessment, latest, onOpenReport }: { assessment: KdaN
   )
 }
 
-function CandidateLedger({ embedded = false, evaluation, latest, navigation }: { embedded?: boolean; evaluation: KdaEvaluationView; latest: boolean; navigation: KdaViewNavigation }) {
+function CandidateLedger({ embedded = false, evaluation, latest, navigation, onOpenRawEvaluation }: { embedded?: boolean; evaluation: KdaEvaluationView; latest: boolean; navigation: KdaViewNavigation; onOpenRawEvaluation: () => void }) {
   const [reportOpen, setReportOpen] = useState(false)
   const result = evaluation.result
   const correctness = result.stages.find(stage => stage.stage === 'correctness')
@@ -599,7 +604,9 @@ function CandidateLedger({ embedded = false, evaluation, latest, navigation }: {
           <div><div style={{ fontSize: 10, opacity: 0.48 }}>Performance</div><ResultText tone={result.improvementPercent !== undefined && result.improvementPercent >= 0 ? color.promote : undefined}>{metricText(result.candidateMetric, result.metricUnit)} · {percentText(result.improvementPercent)}</ResultText></div>
           <div><div style={{ fontSize: 10, opacity: 0.48 }}>Decision</div><Tag tone={decisionColor[result.decision]}>{result.decision}</Tag><div style={{ fontSize: 10, marginTop: 4, opacity: 0.62 }}>{result.reason}</div></div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            <ActionButton onClick={() => navigation.openCall(evaluation.callId, evaluation.seq)}>Open original call</ActionButton>
+            {ncuReport === undefined
+              ? <span style={{ color: color.revise, fontSize: 10, padding: '6px 0' }}>NCU report unavailable</span>
+              : <PrimaryActionButton onClick={() => setReportOpen(true)}>View NCU report</PrimaryActionButton>}
             <ActionButton onClick={() => navigation.inspectCall(evaluation.callId)}>Open in Trajectory</ActionButton>
           </div>
         </div>
@@ -712,6 +719,7 @@ function CandidateLedger({ embedded = false, evaluation, latest, navigation }: {
             {profileStage?.artifact !== undefined && <span>artifact {profileStage.artifact}</span>}
             {result.profileContext !== undefined && <span>profile {result.profileContext}</span>}
           </div>
+          <div style={{ marginTop: 9 }}><ActionButton onClick={onOpenRawEvaluation}>View raw evaluation</ActionButton></div>
         </EvidenceNode>
           </div>
         </details>
@@ -753,7 +761,16 @@ function CandidateDetailDrawer({ evaluation, navigation, onClose }: { evaluation
           <button aria-label="Close candidate details" onClick={onClose} style={{ background: 'transparent', border, borderRadius: 6, color: 'inherit', cursor: 'pointer', fontSize: 18, height: 30, marginLeft: 'auto', width: 32 }} type="button">×</button>
         </header>
         <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
-          <CandidateLedger embedded evaluation={evaluation} latest={false} navigation={navigation} />
+          <CandidateLedger
+            embedded
+            evaluation={evaluation}
+            latest={false}
+            navigation={navigation}
+            onOpenRawEvaluation={() => {
+              onClose()
+              navigation.openCall(evaluation.callId, evaluation.seq)
+            }}
+          />
         </div>
       </aside>
     </div>
