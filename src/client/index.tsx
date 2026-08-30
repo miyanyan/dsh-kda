@@ -183,7 +183,7 @@ export function KdaToolRow({ block, inspect }: ToolCallViewProps) {
   )
 }
 
-export const inject = ['slots', 'layout']
+export const inject = ['slots', 'layout', 'sessions']
 
 /** Register the keyed result card and the dedicated KDA conversation view. */
 export function apply(ctx: Context): void {
@@ -201,7 +201,7 @@ export function apply(ctx: Context): void {
       order: 30,
       label: () => 'KDA',
       store: chatStore,
-      inject: (_sessionId, actions) => ({
+      inject: (sessionId, actions) => ({
         openCall: (callId: string, seq: number) => {
           actions.select({ turnSeq: seq, callId, toolName: 'kda_evaluate_candidate' })
           ctx.layout.openDetails()
@@ -209,6 +209,12 @@ export function apply(ctx: Context): void {
         inspectCall: (callId: string) => {
           actions.setInspect({ callId })
           actions.setView('trajectory')
+        },
+        loadOlder: async () => {
+          const scoped = ctx.sessions.scope(sessionId)
+          const conversation = scoped?.get('conversation')
+          if (conversation === undefined) throw new Error(`dsh-kda could not resolve conversation history for session "${sessionId}"`)
+          await conversation.loadOlder()
         },
       }),
     },

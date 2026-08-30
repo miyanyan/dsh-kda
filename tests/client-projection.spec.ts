@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { parseKdaResult, projectKdaRuns, type KdaResultView } from '../src/client/kda-projection.js'
+import { countRecoveredCandidates, summarizeRunOutcome } from '../src/client/kda-view.js'
 import { ncuAssessment } from './fixtures.js'
 
 const unverified = {
@@ -130,6 +131,44 @@ describe('KDA client projection', () => {
     const run = projectKdaRuns([node(latest, 3), node(baseline, 1)])[0]
     expect(run?.bestPromoted?.candidate).toBe('safe-v1')
     expect(run?.fastestMeasured?.candidate).toBe('fast-but-unverified')
+  })
+
+  it('counts lineage summaries whose original evaluator result is outside loaded history', () => {
+    const baseline = result()
+    const candidate = result({
+      evaluationId: 'eval-2', iteration: 2, candidate: 'vector-load-v1', candidateRole: 'experiment', parentCandidate: 'baseline',
+      candidates: [
+        ...(baseline.candidates ?? []),
+        {
+          evaluationId: 'eval-2', candidate: 'vector-load-v1', candidateRole: 'experiment', parentCandidate: 'baseline', iteration: 2,
+          hypothesis: 'Increase load width.', candidateMetric: 8.5, baselineMetric: 10, metricUnit: 'us', improvementPercent: 15,
+          lowerIsBetter: true, minimumImprovementPercent: 5, decision: 'promote', benchmarkContext: 'rtx5070ti-shape-a',
+          profileStatus: 'not-requested', mechanismVerdict: 'unverified',
+        },
+      ],
+    })
+
+    expect(countRecoveredCandidates(projectKdaRuns([node(candidate, 2)]))).toBe(1)
+    expect(countRecoveredCandidates(projectKdaRuns([node(baseline, 1), node(candidate, 2)]))).toBe(0)
+  })
+
+  it('projects the scan-first outcome from the latest durable evaluation', () => {
+    const promoted = result({
+      candidate: 'vector-load-v1', candidateRole: 'experiment', candidateMetric: 8.5, improvementPercent: 15,
+      decision: 'promote', reason: 'Correct and faster.', ncuReportAssessment: ncuAssessment(),
+      candidates: [{
+        candidate: 'vector-load-v1', candidateRole: 'experiment', iteration: 2, hypothesis: 'Increase load width.',
+        baselineMetric: 10, candidateMetric: 8.5, metricUnit: 'us', improvementPercent: 15, lowerIsBetter: true,
+        minimumImprovementPercent: 5, decision: 'promote',
+      }],
+    })
+    const run = projectKdaRuns([node(promoted, 2)])[0]
+    expect(run === undefined ? undefined : summarizeRunOutcome(run)).toMatchObject({
+      best: { candidate: 'vector-load-v1', candidateMetric: 8.5 },
+      latest: { decision: 'promote', reason: 'Correct and faster.' },
+      diagnosis: 'The kernel is latency-bound on dependent global loads, not DRAM bandwidth.',
+      nextAction: 'Unroll to expose four independent loads.',
+    })
   })
 
   it('projects running candidates, their stages, and branched lineage without inventing results', () => {

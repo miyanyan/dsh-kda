@@ -16,7 +16,6 @@ import {
   type KdaProfileView,
   type KdaProfileStatusView,
   type KdaRunningCandidateView,
-  type KdaRunningStageStatusView,
   type KdaRunView,
   type KdaStageView,
 } from './kda-projection.js'
@@ -24,6 +23,7 @@ import {
 export interface KdaViewNavigation {
   openCall: (callId: string, seq: number) => void
   inspectCall: (callId: string) => void
+  loadOlder: () => Promise<void>
 }
 
 const color = {
@@ -135,8 +135,8 @@ function ResultText({ children, tone }: { children: ReactNode; tone?: string | u
   return <span style={{ color: tone, fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap' }}>{children}</span>
 }
 
-function ActionButton({ children, onClick }: { children: ReactNode; onClick: () => void }) {
-  return <button type="button" onClick={onClick} style={{ background: 'transparent', border, borderRadius: 5, color: 'inherit', cursor: 'pointer', fontSize: 11, padding: '5px 8px' }}>{children}</button>
+function ActionButton({ children, disabled = false, onClick }: { children: ReactNode; disabled?: boolean; onClick: () => void }) {
+  return <button type="button" disabled={disabled} onClick={onClick} style={{ background: 'transparent', border, borderRadius: 5, color: 'inherit', cursor: disabled ? 'wait' : 'pointer', fontSize: 11, opacity: disabled ? 0.58 : 1, padding: '5px 8px' }}>{children}</button>
 }
 
 interface EvidenceNodeProps {
@@ -556,34 +556,7 @@ function NcuReportNodes({ assessment, latest, onOpenReport }: { assessment: KdaN
   )
 }
 
-function LineageTree({ run }: { run: KdaRunView }) {
-  return (
-    <div style={{ borderBottom: border, padding: '8px 12px' }} data-kda-lineage="true" role="tree" aria-label="Candidate lineage">
-      <div style={{ fontSize: 10, fontWeight: 700, marginBottom: 5, opacity: 0.52, textTransform: 'uppercase' }}>Candidate lineage</div>
-      <div style={{ display: 'grid', gap: 3 }}>
-        {run.lineageRows.map(row => {
-          const candidate = row.candidateView
-          const tone = row.state === 'running' ? color.benchmark : decisionColor[candidate?.decision ?? 'revise']
-          return (
-            <div key={row.key} role="treeitem" aria-level={row.depth + 1} style={{ alignItems: 'center', display: 'grid', gap: 7, gridTemplateColumns: 'minmax(160px, 1fr) auto auto', marginLeft: row.depth * 18, minHeight: 25 }}>
-              <span style={{ alignItems: 'center', display: 'flex', minWidth: 0 }}>
-                <span aria-hidden="true" style={{ color: tone, marginRight: 6 }}>{row.depth === 0 ? '●' : '└─'}</span>
-                <strong style={{ fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis' }}>{row.candidate}</strong>
-                {row.parentCandidate !== undefined && <span style={{ fontSize: 10, marginLeft: 6, opacity: 0.45 }}>from {row.parentCandidate}</span>}
-              </span>
-              <ResultText>{candidate === undefined ? '—' : metricText(candidate.candidateMetric, candidate.metricUnit)}</ResultText>
-              {row.state === 'running'
-                ? <Tag tone={color.benchmark}>running</Tag>
-                : <Tag tone={tone}>{candidate?.decision ?? 'unknown'}</Tag>}
-            </div>
-          )
-        })}
-      </div>
-    </div>
-  )
-}
-
-function CandidateLedger({ evaluation, latest, navigation }: { evaluation: KdaEvaluationView; latest: boolean; navigation: KdaViewNavigation }) {
+function CandidateLedger({ embedded = false, evaluation, latest, navigation }: { embedded?: boolean; evaluation: KdaEvaluationView; latest: boolean; navigation: KdaViewNavigation }) {
   const [reportOpen, setReportOpen] = useState(false)
   const result = evaluation.result
   const correctness = result.stages.find(stage => stage.stage === 'correctness')
@@ -603,8 +576,8 @@ function CandidateLedger({ evaluation, latest, navigation }: { evaluation: KdaEv
 
   return (
     <>
-    <details open={latest} style={{ borderBottom: border }} data-kda-candidate={result.candidate}>
-      <summary style={{ alignItems: 'center', background: latest ? 'color-mix(in srgb, currentColor 2%, transparent)' : undefined, cursor: 'pointer', display: 'grid', gap: 10, gridTemplateColumns: '34px minmax(180px, 1fr) auto auto auto auto', listStyle: 'none', minHeight: 43, padding: '0 12px' }}>
+    <details open={latest || embedded} style={{ borderBottom: embedded ? 0 : border }} data-kda-candidate-details={result.candidate}>
+      <summary style={{ alignItems: 'center', background: latest ? 'color-mix(in srgb, currentColor 2%, transparent)' : undefined, cursor: 'pointer', display: embedded ? 'none' : 'grid', gap: 10, gridTemplateColumns: '34px minmax(180px, 1fr) auto auto auto auto', listStyle: 'none', minHeight: 43, padding: '0 12px' }}>
         <span style={{ alignItems: 'center', background: decisionColor[result.decision], borderRadius: 999, color: 'white', display: 'inline-flex', fontSize: 11, fontWeight: 750, height: 22, justifyContent: 'center', width: 22 }}>{result.iteration ?? '?'}</span>
         <span style={{ minWidth: 0 }}>
           <strong style={{ fontSize: 13 }}>{result.candidate}</strong>
@@ -615,7 +588,7 @@ function CandidateLedger({ evaluation, latest, navigation }: { evaluation: KdaEv
         <Tag tone={ncuReport === undefined ? color.revise : assessedDimensions === 6 ? color.promote : color.profile}>{ncuReport === undefined ? 'NO REPORT' : `REPORT ${assessedDimensions}/6`}</Tag>
         <Tag tone={decisionColor[result.decision]}>{result.decision}</Tag>
       </summary>
-      <div style={{ borderTop: subtleBorder, padding: '0 12px 10px' }} data-kda-ledger="true">
+      <div style={{ borderTop: embedded ? 0 : subtleBorder, padding: embedded ? '0 16px 18px' : '0 12px 10px' }} data-kda-ledger="true">
         <div style={{ alignItems: 'start', display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', padding: '10px 0' }} data-kda-candidate-summary="true">
           <div style={{ gridColumn: 'span 2', minWidth: 0 }}>
             <div style={{ fontSize: 10, fontWeight: 750, opacity: 0.48, textTransform: 'uppercase' }}>Candidate story</div>
@@ -683,7 +656,7 @@ function CandidateLedger({ evaluation, latest, navigation }: { evaluation: KdaEv
           >
             <div style={{ color: color.revise, fontSize: 11 }}>This compact overview is not an original skill decision. Re-run the candidate with a validated original NCU assessment sidecar.</div>
           </EvidenceNode>
-        ) : <NcuReportNodes assessment={ncuReport} latest={latest} onOpenReport={() => setReportOpen(true)} />}
+        ) : <NcuReportNodes assessment={ncuReport} latest={latest && !embedded} onOpenReport={() => setReportOpen(true)} />}
         <EvidenceNode
           label="NCU Verdict"
           tone={color.mechanism}
@@ -704,7 +677,7 @@ function CandidateLedger({ evaluation, latest, navigation }: { evaluation: KdaEv
           title={result.reason}
           preview={`${ncuReport === undefined ? 'original report missing' : 'original report recorded'} · ${ncuPolicy}`}
           result={<Tag tone={decisionColor[result.decision]}>{result.decision}</Tag>}
-          defaultOpen={latest}
+          defaultOpen={latest && !embedded}
           dataKind="decision"
         >
           <DecisionGates gates={result.decisionGates} />
@@ -749,94 +722,212 @@ function CandidateLedger({ evaluation, latest, navigation }: { evaluation: KdaEv
   )
 }
 
-const runningStatusColor: Record<KdaRunningStageStatusView, string> = {
-  waiting: color.muted,
-  running: color.benchmark,
-  passed: color.promote,
-  failed: color.reject,
+function CandidateDetailDrawer({ evaluation, navigation, onClose }: { evaluation: KdaEvaluationView; navigation: KdaViewNavigation; onClose: () => void }) {
+  const result = evaluation.result
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape' && document.querySelector('[data-kda-ncu-drawer]') === null) onClose()
+    }
+    document.addEventListener('keydown', closeOnEscape)
+    return () => document.removeEventListener('keydown', closeOnEscape)
+  }, [onClose])
+  return (
+    <div
+      aria-label={`${result.candidate} candidate details`}
+      aria-modal="true"
+      data-kda-candidate-drawer={result.candidate}
+      onClick={event => { if (event.currentTarget === event.target) onClose() }}
+      role="dialog"
+      style={{ background: 'color-mix(in srgb, black 24%, transparent)', display: 'flex', inset: 0, justifyContent: 'flex-end', position: 'fixed', zIndex: 1100 }}
+    >
+      <aside style={{ background: 'var(--dsw-alias-bg-layer-1, white)', boxShadow: '-12px 0 36px color-mix(in srgb, black 18%, transparent)', color: 'var(--dsw-alias-label-primary, inherit)', display: 'flex', flexDirection: 'column', height: '100%', maxWidth: '94vw', width: 720 }}>
+        <header style={{ alignItems: 'center', borderBottom: border, display: 'flex', gap: 10, padding: '13px 16px' }}>
+          <span style={{ alignItems: 'center', background: decisionColor[result.decision], borderRadius: 999, color: 'white', display: 'inline-flex', fontSize: 11, fontWeight: 750, height: 25, justifyContent: 'center', width: 25 }}>{result.iteration ?? '?'}</span>
+          <span style={{ minWidth: 0 }}>
+            <strong style={{ display: 'block', fontSize: 15 }}>{result.candidate}</strong>
+            <span style={{ display: 'block', fontSize: 10, marginTop: 2, opacity: 0.5 }}>{result.parentCandidate === undefined ? 'Baseline candidate' : `from ${result.parentCandidate}`}</span>
+          </span>
+          <ResultText>{metricText(result.candidateMetric, result.metricUnit)}</ResultText>
+          <ResultText tone={result.improvementPercent === undefined ? undefined : result.improvementPercent >= 0 ? color.promote : color.reject}>{percentText(result.improvementPercent)}</ResultText>
+          <Tag tone={decisionColor[result.decision]}>{result.decision}</Tag>
+          <button aria-label="Close candidate details" onClick={onClose} style={{ background: 'transparent', border, borderRadius: 6, color: 'inherit', cursor: 'pointer', fontSize: 18, height: 30, marginLeft: 'auto', width: 32 }} type="button">×</button>
+        </header>
+        <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+          <CandidateLedger embedded evaluation={evaluation} latest={false} navigation={navigation} />
+        </div>
+      </aside>
+    </div>
+  )
+}
+
+const iterationColumns = '42px minmax(210px, 1fr) 118px 88px 92px 94px'
+
+function CandidateRow({ evaluation, onSelect }: { evaluation: KdaEvaluationView; onSelect: () => void }) {
+  const result = evaluation.result
+  const assessedDimensions = result.ncuReportAssessment?.dimensions.filter(item => item.status !== 'missing-evidence').length
+  return (
+    <button
+      aria-label={`Open ${result.candidate} details`}
+      data-kda-candidate={result.candidate}
+      onClick={onSelect}
+      style={{ alignItems: 'center', background: 'transparent', border: 0, borderTop: subtleBorder, color: 'inherit', cursor: 'pointer', display: 'grid', font: 'inherit', gap: 10, gridTemplateColumns: iterationColumns, minHeight: 45, padding: '0 12px', textAlign: 'left', width: '100%' }}
+      type="button"
+    >
+      <span style={{ alignItems: 'center', background: decisionColor[result.decision], borderRadius: 999, color: 'white', display: 'inline-flex', fontSize: 11, fontWeight: 750, height: 22, justifyContent: 'center', width: 22 }}>{result.iteration ?? '?'}</span>
+      <span style={{ minWidth: 0 }}>
+        <strong style={{ display: 'block', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{result.candidate}</strong>
+        {result.parentCandidate !== undefined && <span style={{ display: 'block', fontSize: 9, marginTop: 2, opacity: 0.42, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>from {result.parentCandidate}</span>}
+      </span>
+      <ResultText>{metricText(result.candidateMetric, result.metricUnit)}</ResultText>
+      <ResultText tone={result.improvementPercent === undefined ? undefined : result.improvementPercent >= 0 ? color.promote : color.reject}>{percentText(result.improvementPercent)}</ResultText>
+      <Tag tone={result.ncuReportAssessment === undefined ? color.revise : assessedDimensions === 6 ? color.promote : color.profile}>{result.ncuReportAssessment === undefined ? '—' : `${assessedDimensions}/6`}</Tag>
+      <Tag tone={decisionColor[result.decision]}>{result.decision}</Tag>
+    </button>
+  )
 }
 
 function RunningCandidateLedger({ candidate, navigation }: { candidate: KdaRunningCandidateView; navigation: KdaViewNavigation }) {
+  const activeStage = candidate.stages.find(stage => stage.status === 'running')?.stage ?? candidate.stages.filter(stage => stage.status === 'passed').at(-1)?.stage ?? 'queued'
   return (
-    <div style={{ borderBottom: border, padding: '10px 12px' }} data-kda-running-candidate={candidate.candidate}>
-      <div style={{ alignItems: 'center', display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-        <span aria-hidden="true" style={{ color: color.benchmark }}>●</span>
-        <strong>{candidate.candidate}</strong>
-        {candidate.parentCandidate !== undefined && <span style={{ fontSize: 11, opacity: 0.5 }}>← {candidate.parentCandidate}</span>}
-        <Tag tone={color.benchmark}>evaluating</Tag>
-        <span style={{ marginLeft: 'auto' }}><ActionButton onClick={() => navigation.inspectCall(candidate.callId)}>Open in Trajectory</ActionButton></span>
-      </div>
-      <div style={{ fontSize: 11, marginTop: 7 }}><strong>{candidate.changeSummary ?? 'Candidate evaluation in progress'}</strong></div>
-      {candidate.hypothesis !== undefined && <div style={{ fontSize: 11, marginTop: 3, opacity: 0.62 }}>{candidate.hypothesis}</div>}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 9 }}>
-        {candidate.stages.map(stage => <Tag key={stage.stage} tone={runningStatusColor[stage.status]}>{stage.stage} · {stage.status}</Tag>)}
-      </div>
-    </div>
+    <button aria-label={`Open running ${candidate.candidate} in Trajectory`} data-kda-running-candidate={candidate.candidate} onClick={() => navigation.inspectCall(candidate.callId)} style={{ alignItems: 'center', background: 'transparent', border: 0, borderTop: subtleBorder, color: 'inherit', cursor: 'pointer', display: 'grid', font: 'inherit', gap: 10, gridTemplateColumns: iterationColumns, minHeight: 45, padding: '0 12px', textAlign: 'left', width: '100%' }} type="button">
+      <span style={{ color: color.benchmark, fontSize: 17 }}>●</span>
+      <span style={{ minWidth: 0 }}><strong style={{ display: 'block', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{candidate.candidate}</strong>{candidate.parentCandidate !== undefined && <span style={{ display: 'block', fontSize: 9, marginTop: 2, opacity: 0.42 }}>from {candidate.parentCandidate}</span>}</span>
+      <ResultText>—</ResultText>
+      <ResultText tone={color.benchmark}>{activeStage}</ResultText>
+      <Tag tone={color.benchmark}>{candidate.stages.filter(stage => stage.status === 'passed').length}/{candidate.stages.length}</Tag>
+      <Tag tone={color.benchmark}>running</Tag>
+    </button>
   )
 }
 
 function RecoveredCandidateLedger({ candidate }: { candidate: KdaCandidateView }) {
   return (
-    <div style={{ borderBottom: border, padding: '10px 12px' }} data-kda-recovered-candidate={candidate.candidate}>
-      <div style={{ alignItems: 'center', display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-        <span aria-hidden="true" style={{ color: decisionColor[candidate.decision] }}>●</span>
-        <strong>{candidate.candidate}</strong>
-        {candidate.parentCandidate !== undefined && <span style={{ fontSize: 11, opacity: 0.5 }}>← {candidate.parentCandidate}</span>}
-        <Tag tone={decisionColor[candidate.decision]}>{candidate.decision}</Tag>
-        <ResultText>{metricText(candidate.candidateMetric, candidate.metricUnit)}</ResultText>
-      </div>
-      {candidate.changeSummary !== undefined && <div style={{ fontSize: 11, marginTop: 7 }}><strong>{candidate.changeSummary}</strong></div>}
-      <div style={{ fontSize: 11, marginTop: 3, opacity: 0.62 }}>{candidate.hypothesis}</div>
-      <div style={{ color: color.revise, fontSize: 10, marginTop: 7 }}>Candidate summary recovered from the latest durable result. Load earlier session history to inspect its complete stages and original call.</div>
+    <div data-kda-recovered-candidate={candidate.candidate} style={{ alignItems: 'center', borderTop: subtleBorder, display: 'grid', gap: 10, gridTemplateColumns: iterationColumns, minHeight: 45, padding: '0 12px' }} title="Load earlier evidence to open this candidate">
+      <span style={{ alignItems: 'center', background: decisionColor[candidate.decision], borderRadius: 999, color: 'white', display: 'inline-flex', fontSize: 11, fontWeight: 750, height: 22, justifyContent: 'center', width: 22 }}>{candidate.iteration}</span>
+      <span style={{ minWidth: 0 }}><strong style={{ display: 'block', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{candidate.candidate}</strong>{candidate.parentCandidate !== undefined && <span style={{ display: 'block', fontSize: 9, marginTop: 2, opacity: 0.42 }}>from {candidate.parentCandidate}</span>}</span>
+      <ResultText>{metricText(candidate.candidateMetric, candidate.metricUnit)}</ResultText>
+      <ResultText tone={candidate.improvementPercent === undefined ? undefined : candidate.improvementPercent >= 0 ? color.promote : color.reject}>{percentText(candidate.improvementPercent)}</ResultText>
+      <Tag tone={color.revise}>summary</Tag>
+      <Tag tone={decisionColor[candidate.decision]}>{candidate.decision}</Tag>
+    </div>
+  )
+}
+
+function evaluationForCandidate(run: KdaRunView, candidate: KdaCandidateView): KdaEvaluationView | undefined {
+  return candidate.evaluationId === undefined
+    ? run.evaluations.find(evaluation => evaluation.result.candidate === candidate.candidate)
+    : run.evaluations.find(evaluation => evaluation.result.evaluationId === candidate.evaluationId)
+}
+
+/** Count lineage summaries whose original durable evaluator result is not in the loaded snapshot. */
+export function countRecoveredCandidates(runs: readonly KdaRunView[]): number {
+  return runs.reduce(
+    (total, run) => total + run.lineage.filter(candidate => evaluationForCandidate(run, candidate) === undefined).length,
+    0,
+  )
+}
+
+function OutcomeCard({ children, label, tone = color.muted }: { children: ReactNode; label: string; tone?: string }) {
+  return (
+    <section style={{ border, borderRadius: 7, minHeight: 76, padding: '10px 11px' }}>
+      <div style={{ color: tone, fontSize: 9, fontWeight: 800, letterSpacing: '0.07em', textTransform: 'uppercase' }}>{label}</div>
+      <div style={{ fontSize: 12, lineHeight: 1.4, marginTop: 6 }}>{children}</div>
+    </section>
+  )
+}
+
+export interface KdaOutcomeView {
+  best?: KdaCandidateView | undefined
+  latest?: KdaEvaluationView['result'] | undefined
+  diagnosis: string
+  nextAction: string
+}
+
+/** Project the four scan-first facts shown above an optimization run. */
+export function summarizeRunOutcome(run: KdaRunView): KdaOutcomeView {
+  const latest = run.evaluations.at(-1)?.result
+  return {
+    best: run.bestPromoted,
+    latest,
+    diagnosis: latest?.ncuReportAssessment?.primaryDiagnosis ?? latest?.profileAnalysis?.diagnosis ?? 'No profiler diagnosis recorded.',
+    nextAction: latest?.ncuReportAssessment?.recommendations[0]?.action ?? latest?.profileAnalysis?.nextExperiment.action ?? 'No next experiment recorded.',
+  }
+}
+
+function OutcomeSummary({ run }: { run: KdaRunView }) {
+  const { best, diagnosis, latest, nextAction } = summarizeRunOutcome(run)
+  return (
+    <div style={{ background: 'color-mix(in srgb, currentColor 2%, transparent)', borderBottom: border, display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', padding: 10 }} data-kda-outcome="true">
+      <OutcomeCard label="Best result" tone={color.promote}>
+        <strong style={{ display: 'block', fontSize: 14 }}>{best?.candidate ?? 'No promoted candidate'}</strong>
+        <span style={{ alignItems: 'center', display: 'flex', gap: 8, marginTop: 3 }}><ResultText>{metricText(best?.candidateMetric, best?.metricUnit)}</ResultText><ResultText tone={color.promote}>{percentText(best?.improvementPercent)}</ResultText></span>
+      </OutcomeCard>
+      <OutcomeCard label="Latest verdict" tone={latest === undefined ? color.muted : decisionColor[latest.decision]}>
+        {latest === undefined ? <span>No completed evaluation.</span> : <><Tag tone={decisionColor[latest.decision]}>{latest.decision}</Tag><span style={{ display: '-webkit-box', marginTop: 6, overflow: 'hidden', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2 }}>{latest.reason}</span></>}
+      </OutcomeCard>
+      <OutcomeCard label="NCU diagnosis" tone={color.profile}>
+        <span style={{ overflowWrap: 'anywhere' }}>{diagnosis}</span>
+      </OutcomeCard>
+      <OutcomeCard label="Recommended action" tone={color.next}>
+        <strong style={{ display: '-webkit-box', overflow: 'hidden', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2 }}>{nextAction}</strong>
+      </OutcomeCard>
     </div>
   )
 }
 
 function RunLedger({ run, latest, navigation }: { run: KdaRunView; latest: boolean; navigation: KdaViewNavigation }) {
+  const [selectedEvaluation, setSelectedEvaluation] = useState<KdaEvaluationView>()
   const best = run.bestPromoted
-  const fastest = run.fastestMeasured
   const latestResult = run.evaluations.at(-1)?.result
-  const fastestIsBest = fastest !== undefined && fastest.candidate === best?.candidate
-  const evaluationsById = new Map(run.evaluations.map(evaluation => [evaluation.result.evaluationId, evaluation]))
-  const evaluationsByCandidate = new Map(run.evaluations.map(evaluation => [evaluation.result.candidate, evaluation]))
   return (
-    <details open={latest} style={{ border, borderRadius: 7, overflow: 'hidden' }} data-kda-run={run.runId}>
-      <summary style={{ alignItems: 'center', cursor: 'pointer', display: 'flex', flexWrap: 'wrap', gap: 12, listStyle: 'none', minHeight: 48, padding: '7px 12px' }}>
-        <span style={{ flex: '1 1 220px', minWidth: 0 }}>
-          <strong>{run.task ?? 'KDA optimization run'}</strong>
-          <code style={{ display: 'block', fontSize: 10, marginTop: 2, opacity: 0.48 }}>{run.runId}</code>
-        </span>
-        <span style={{ fontSize: 11 }}>Baseline <strong>{metricText(run.baseline?.candidateMetric, run.baseline?.metricUnit)}</strong></span>
-        <span style={{ fontSize: 11 }}>Best promoted <strong>{metricText(best?.candidateMetric, best?.metricUnit)}</strong></span>
-        <ResultText tone={best?.improvementPercent === undefined ? undefined : best.improvementPercent >= 0 ? color.promote : color.reject}>{percentText(best?.improvementPercent)}</ResultText>
-        {!fastestIsBest && fastest !== undefined && <span style={{ fontSize: 11 }}>Fastest measured <strong>{metricText(fastest.candidateMetric, fastest.metricUnit)}</strong> <span style={{ opacity: 0.55 }}>({fastest.decision})</span></span>}
-        {run.runningCandidates.length > 0
-          ? <Tag tone={color.benchmark}>{run.runningCandidates.length} running</Tag>
-          : <Tag tone={latestResult?.ncuReportAssessment === undefined ? color.revise : color.promote}>{latestResult?.ncuReportAssessment === undefined ? 'NO REPORT' : `${latestResult.ncuReportAssessment.dimensions.filter(item => item.status !== 'missing-evidence').length}/6 REPORT`}</Tag>}
-      </summary>
-      <LineageTree run={run} />
-      {run.objective !== undefined && <div style={{ borderBottom: border, fontSize: 11, opacity: 0.6, padding: '7px 12px' }}><strong>Contract</strong> · {run.objective}</div>}
-      {run.lineage.map((candidate, index) => {
-        const evaluation = candidate.evaluationId === undefined
-          ? evaluationsByCandidate.get(candidate.candidate)
-          : evaluationsById.get(candidate.evaluationId)
-        return evaluation === undefined
-          ? <RecoveredCandidateLedger key={`recovered:${candidate.iteration}:${candidate.candidate}`} candidate={candidate} />
-          : <CandidateLedger key={evaluation.id} evaluation={evaluation} latest={run.runningCandidates.length === 0 && index === run.lineage.length - 1} navigation={navigation} />
-      })}
-      {run.runningCandidates.map(candidate => <RunningCandidateLedger key={candidate.callId} candidate={candidate} navigation={navigation} />)}
-    </details>
+    <>
+      <details open={latest} style={{ border, borderRadius: 7, overflow: 'hidden' }} data-kda-run={run.runId}>
+        <summary style={{ alignItems: 'center', cursor: 'pointer', display: 'flex', flexWrap: 'wrap', gap: 10, listStyle: 'none', minHeight: 48, padding: '7px 12px' }}>
+          <span style={{ flex: '1 1 260px', minWidth: 0 }}>
+            <strong>{run.task ?? 'KDA optimization run'}</strong>
+            <code style={{ display: 'block', fontSize: 9, marginTop: 2, opacity: 0.4 }}>{run.runId}</code>
+          </span>
+          <span style={{ fontSize: 11 }}>Best <strong>{metricText(best?.candidateMetric, best?.metricUnit)}</strong></span>
+          <ResultText tone={best?.improvementPercent === undefined ? undefined : best.improvementPercent >= 0 ? color.promote : color.reject}>{percentText(best?.improvementPercent)}</ResultText>
+          <Tag>{run.lineage.length} iterations</Tag>
+          {run.runningCandidates.length > 0
+            ? <Tag tone={color.benchmark}>{run.runningCandidates.length} running</Tag>
+            : <Tag tone={latestResult?.ncuReportAssessment === undefined ? color.revise : color.promote}>{latestResult?.ncuReportAssessment === undefined ? 'NO NCU' : `${latestResult.ncuReportAssessment.dimensions.filter(item => item.status !== 'missing-evidence').length}/6 NCU`}</Tag>}
+        </summary>
+        <OutcomeSummary run={run} />
+        {run.objective !== undefined && <details style={{ borderBottom: border, fontSize: 10 }}><summary style={{ cursor: 'pointer', listStyle: 'none', opacity: 0.55, padding: '6px 12px' }}>Run contract</summary><div style={{ padding: '0 12px 8px' }}>{run.objective}</div></details>}
+        <section aria-label="Optimization iterations" data-kda-iterations="true" style={{ overflowX: 'auto' }}>
+          <div style={{ minWidth: 690 }}>
+            <div style={{ alignItems: 'center', display: 'grid', fontSize: 9, fontWeight: 750, gap: 10, gridTemplateColumns: iterationColumns, letterSpacing: '0.05em', minHeight: 30, opacity: 0.45, padding: '0 12px', textTransform: 'uppercase' }}>
+              <span>#</span><span>Candidate</span><span>Metric</span><span>vs baseline</span><span>NCU</span><span>Verdict</span>
+            </div>
+            {run.lineage.map(candidate => {
+              const evaluation = evaluationForCandidate(run, candidate)
+              return evaluation === undefined
+                ? <RecoveredCandidateLedger key={`recovered:${candidate.iteration}:${candidate.candidate}`} candidate={candidate} />
+                : <CandidateRow key={evaluation.id} evaluation={evaluation} onSelect={() => setSelectedEvaluation(evaluation)} />
+            })}
+            {run.runningCandidates.map(candidate => <RunningCandidateLedger key={candidate.callId} candidate={candidate} navigation={navigation} />)}
+          </div>
+        </section>
+      </details>
+      {selectedEvaluation !== undefined && <CandidateDetailDrawer evaluation={selectedEvaluation} navigation={navigation} onClose={() => setSelectedEvaluation(undefined)} />}
+    </>
   )
 }
 
 /** Trajectory-style KDA semantic ledger reconstructed from ordinary durable tool results. */
-export function KdaView({ useSession, openCall, inspectCall }: ConvViewProps & KdaViewNavigation) {
+export function KdaView({ useSession, openCall, inspectCall, loadOlder }: ConvViewProps & KdaViewNavigation) {
   let nodes: readonly unknown[] = []
   let runningCalls: readonly unknown[] = []
+  let hasMore = false
+  let loadingOlder = false
   try {
     const snapshot = useSession(value => value)
     nodes = snapshot?.nodes ?? []
     runningCalls = snapshot?.runningCalls ?? []
+    hasMore = snapshot?.hasMore ?? false
+    loadingOlder = snapshot?.loadingOlder ?? false
   } catch {
     // A newly selected view may render once before its Session snapshot is ready.
   }
@@ -844,7 +935,22 @@ export function KdaView({ useSession, openCall, inspectCall }: ConvViewProps & K
   const candidateCount = runs.reduce((sum, run) => sum + run.lineageRows.length, 0)
   const promotedCount = runs.reduce((sum, run) => sum + run.lineage.filter(candidate => candidate.decision === 'promote').length, 0)
   const runningCount = runs.reduce((sum, run) => sum + run.runningCandidates.length, 0)
-  const navigation = useMemo(() => ({ openCall, inspectCall }), [openCall, inspectCall])
+  const recoveredCount = countRecoveredCandidates(runs)
+  const [loadError, setLoadError] = useState<string>()
+  const [requestingOlder, setRequestingOlder] = useState(false)
+  const navigation = useMemo(() => ({ openCall, inspectCall, loadOlder }), [openCall, inspectCall, loadOlder])
+
+  const requestEarlierEvidence = async () => {
+    setRequestingOlder(true)
+    setLoadError(undefined)
+    try {
+      await loadOlder()
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setRequestingOlder(false)
+    }
+  }
 
   return (
     <div style={{ background: 'var(--dsw-alias-bg-layer-1, white)', color: 'var(--dsw-alias-label-primary, inherit)', display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }} data-kda-view="true">
@@ -857,6 +963,21 @@ export function KdaView({ useSession, openCall, inspectCall }: ConvViewProps & K
         <Tag tone={color.promote}>{promotedCount} promoted</Tag>
       </div>
       <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '10px 10px calc(var(--dsh-composer-height, 152px) + 16px)' }}>
+        {recoveredCount > 0 && (
+          <div style={{ alignItems: 'center', background: 'color-mix(in srgb, #d97706 8%, transparent)', border: '1px solid color-mix(in srgb, #d97706 35%, transparent)', borderRadius: 7, display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 10, padding: '9px 12px' }} data-kda-history-status="partial">
+            <span aria-hidden="true" style={{ color: color.revise }}>●</span>
+            <span style={{ flex: '1 1 280px', fontSize: 11 }}>
+              <strong>{recoveredCount} candidate{recoveredCount === 1 ? '' : 's'} only have recovered summaries.</strong>{' '}
+              {hasMore ? 'Load an earlier history page to restore their stages, evidence, and source calls.' : 'All available history is loaded; their original evaluator calls are no longer available in this session.'}
+            </span>
+            {hasMore && (
+              <ActionButton disabled={loadingOlder || requestingOlder} onClick={() => { void requestEarlierEvidence() }}>
+                {loadingOlder || requestingOlder ? 'Loading earlier evidence…' : 'Load earlier evidence'}
+              </ActionButton>
+            )}
+            {loadError !== undefined && <span role="alert" style={{ color: color.reject, flexBasis: '100%', fontSize: 10 }}>{loadError}</span>}
+          </div>
+        )}
         {runs.length === 0 ? (
           <div style={{ border, borderRadius: 7, padding: 30, textAlign: 'center' }} data-kda-empty="true">
             <strong>No schema-v1 KDA evaluations</strong>
