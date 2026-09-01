@@ -61,6 +61,7 @@ describe('kda host integration', () => {
         },
       },
       skills: { register: () => () => undefined },
+      commands: { register: () => () => undefined },
       sandboxPolicy: { resolve: resolvePolicy },
       shell: { resolve: resolveShell, run: runShell },
     } as unknown as Context
@@ -117,6 +118,7 @@ describe('kda host integration', () => {
     const ctx = {
       tools: { register(definition: ToolDefinition) { definitions.push(definition); return () => undefined } },
       skills: { register: () => () => undefined },
+      commands: { register: () => () => undefined },
       sandboxPolicy: { resolve: () => sandboxPolicy },
       shell: { resolve: resolveShell, run: runShell },
     } as unknown as Context
@@ -148,6 +150,7 @@ describe('kda host integration', () => {
     const ctx = {
       tools: { register(definition: ToolDefinition) { definitions.push(definition); return () => undefined } },
       skills: { register: () => () => undefined },
+      commands: { register: () => () => undefined },
       sandboxPolicy: { resolve: () => ({ mode: 'danger-full-access' }) },
       shell: { resolve: (request: Record<string, unknown>) => request, run: runShell },
     } as unknown as Context

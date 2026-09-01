@@ -92,6 +92,8 @@ export interface KdaNcuReportAssessment {
   reportMarkdown: string
   fullReportPath?: string
   sourceReportPath?: string
+  /** Concat report produced beside benchmark/profile execution, then materialized for the viewer host. */
+  mergedReportPath?: string
   analysisPath?: string
   targetHardware: string
   targetKernel: string
@@ -203,6 +205,7 @@ export interface KdaCandidateSummary {
   candidate: string
   candidateRole: KdaCandidateRole
   parentCandidate?: string
+  /** Zero-based candidate index: the measured baseline is 0. */
   iteration: number
   hypothesis: string
   changeSummary?: string
@@ -302,6 +305,7 @@ export interface KdaEvaluationResult {
   schemaVersion: 1
   runId: string
   evaluationId: string
+  /** Zero-based candidate index: the measured baseline is 0. */
   iteration: number
   task: string
   objective: string

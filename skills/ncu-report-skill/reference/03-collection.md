@@ -11,6 +11,29 @@ This document lists the exact `ncu` commands you should run, in what order, and 
 - Writable `$HOME` so ncu can cache section files.
 - Kernel name known (check with `cuobjdump --dump-function-names your_binary` if unsure).
 
+### KDA candidate identity
+
+When this workflow is recording a KDA optimization run, wrap the one target launch in an NVTX push/pop range named exactly after the KDA candidate id (for example `baseline` or `v2-double-buffer`) and add `--nvtx` to both saved-report commands. Keep the range around the launch and its synchronization so the captured result retains an unambiguous `property__range_name`.
+
+This is required for multi-iteration inspection: KDA delegates metric sorting to the official Nsight Compute Summary page, and the official Report Merge Tool `Concat` operation preserves each result without aggregation. Kernel symbols are often identical across candidates, so the range name is the durable candidate label.
+
+After collection, add `Range Name:property__range_name` to the Summary page's Metrics/Properties list if it is not already visible. Do not implement a second KDA-owned metric table.
+
+### Build the run-level Concat report where profiling runs
+
+After each profiled KDA candidate, rebuild one cumulative report with NVIDIA's official Report Merge Tool in the same environment that owns the benchmark and `.ncu-rep` files:
+
+```bash
+ReportMergeTool \
+  --input "$PROFILE_RUN_DIR/reports/full" \
+  --output "$PROFILE_RUN_DIR/reports/merged/run-concat.ncu-rep" \
+  --result-merge-operation concat
+```
+
+On Windows the executable may be named `ReportMergeTool.exe`. The `full` input directory must contain only one full report per candidate. Keep source captures and the `merged` output in separate directories so an older combined report can never become an input.
+
+This is the execution/viewer handoff boundary. If profiling runs in WSL and DSH runs on Windows, place the output in the mounted project workspace (for example under `/mnt/d/...`). If profiling runs on a remote server, transfer only `run-concat.ncu-rep` into the local DSH workspace. Record that viewer-accessible relative path as `mergedReportPath` in the NCU assessment sidecar. KDA then opens the artifact with the viewer environment's `ncu-ui`; it does not merge reports again.
+
 Quick permission test:
 ```bash
 ncu --section SpeedOfLight -k "regex:YOUR_KERNEL_NAME" -c 1 ./harness [args]
@@ -26,6 +49,7 @@ Collects all standard sections plus PM sampling (time-series data). This is the 
 
 ```bash
 ncu --set full \
+    --nvtx \
     --section PmSampling \
     --section PmSampling_WarpStates \
     -k "regex:KERNEL_REGEX" \
@@ -53,6 +77,7 @@ Collects per-PC stall sampling data. Requires `-lineinfo` at compile time. Fast 
 
 ```bash
 ncu --set source \
+    --nvtx \
     --section SourceCounters \
     -k "regex:KERNEL_REGEX" \
     -c 1 \

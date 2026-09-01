@@ -1,10 +1,11 @@
 import * as React from 'react'
 import { useState, type CSSProperties } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-api-remotes/client'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ChatStore } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
-import { KdaView } from './kda-view.js'
+import { KdaView, type KdaNsightRequest } from './kda-view.js'
 import {
   parseKdaResult,
   type KdaCandidateView as CandidateView,
@@ -114,7 +115,7 @@ export function KdaToolRow({ block, inspect }: ToolCallViewProps) {
       {expanded && (
         <div style={{ borderTop: '1px solid color-mix(in srgb, currentColor 10%, transparent)', padding: 12 }}>
           <div style={{ opacity: 0.65, marginBottom: 6 }}>
-            Run <code>{result.runId}</code>{result.iteration === undefined ? '' : ` · iteration ${result.iteration}`}
+            Run <code>{result.runId}</code>{result.iteration === undefined ? '' : ` · candidate #${result.iteration}`}
           </div>
           {result.hypothesis !== undefined && <div style={{ marginBottom: 6 }}><strong>Hypothesis:</strong> {result.hypothesis}</div>}
           {result.changeSummary !== undefined && <div style={{ marginBottom: 8, opacity: 0.78 }}>{result.changeSummary}</div>}
@@ -183,7 +184,7 @@ export function KdaToolRow({ block, inspect }: ToolCallViewProps) {
   )
 }
 
-export const inject = ['slots', 'layout', 'sessions']
+export const inject = ['slots', 'layout', 'sessions', 'remote', 'remote.commands']
 
 /** Register the keyed result card and the dedicated KDA conversation view. */
 export function apply(ctx: Context): void {
@@ -209,6 +210,14 @@ export function apply(ctx: Context): void {
         inspectCall: (callId: string) => {
           actions.setInspect({ callId })
           actions.setView('trajectory')
+        },
+        launchNsight: async (request: KdaNsightRequest) => {
+          const line = `/kda-nsight ${encodeURIComponent(JSON.stringify(request))}`
+          const response = await ctx.remote.commands.execute(sessionId, line, [])
+          if (!response.ok) throw new Error(`${response.error.message} (${response.error.code})`)
+          if (response.value === undefined) throw new Error('The dsh-kda host command is unavailable. Restart DSH after updating the plugin.')
+          if (response.value.result.kind === 'error') throw new Error(response.value.result.text)
+          return response.value.result.text ?? 'NVIDIA Nsight Compute started.'
         },
         loadOlder: async () => {
           const scoped = ctx.sessions.scope(sessionId)

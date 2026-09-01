@@ -471,13 +471,15 @@ export async function evaluateCandidate(
   const runId = request.optimizationRunId
   const evaluationId = randomUUID()
   const previousCandidates = [...(request.previousCandidates ?? [])]
-  const iteration = previousCandidates.length + 1
+    .sort((left, right) => left.iteration - right.iteration)
+    .map((candidate, index) => ({ ...candidate, iteration: index }))
+  const iteration = previousCandidates.length
   const trajectory: KdaTrajectoryEvent[] = []
   const emit = (event: KdaTrajectoryEvent): void => {
     trajectory.push(event)
     observer?.(event)
   }
-  if (iteration === 1) {
+  if (iteration === 0) {
     emit({ type: 'kda/run-started', at: now(), runId, task: request.task, objective: request.objective })
   }
   emit({

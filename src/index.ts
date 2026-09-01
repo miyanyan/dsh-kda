@@ -4,16 +4,18 @@ import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import type {} from '@deepseek-ai/dsh-commands'
 import type {} from '@deepseek-ai/dsh-sandbox-policy'
 import type {} from '@deepseek-ai/dsh-shell'
 import { collectCandidateHistory } from './history.js'
 import { KdaNativeTrajectoryRecorder } from './native-trajectory.js'
 import { parseNcuReportAssessmentJson } from './ncu-report.js'
+import { describeNsightLaunch, NsightLauncher, parseNsightCommandInput } from './nsight.js'
 import { evaluateCandidate } from './runner.js'
 import type { KdaCommandResult, KdaEvaluationRequest, KdaNcuReportAssessment, KdaStageName } from './types.js'
 
 export const name = 'kda'
-export const inject = ['tools', 'shell', 'skills', 'sandboxPolicy']
+export const inject = ['tools', 'shell', 'skills', 'sandboxPolicy', 'commands']
 
 function bundledSkill(relativePath: string): { path: string; content: string } {
   const path = fileURLToPath(new URL(relativePath, import.meta.url))
@@ -35,6 +37,8 @@ export interface Config {
   timeoutMs?: number
   outputMaxBytes?: number
   defaultMinimumImprovementPercent?: number
+  /** Optional explicit Nsight Compute UI executable. Auto-discovered when omitted. */
+  ncuUiPath?: string
 }
 
 /** Runtime validation for deployment-owned KDA limits. */
@@ -42,6 +46,7 @@ export const Config: z<Config> = z.object({
   timeoutMs: z.number().min(1).default(300_000),
   outputMaxBytes: z.number().min(1_024).default(1_048_576),
   defaultMinimumImprovementPercent: z.number().min(0).default(0),
+  ncuUiPath: z.string(),
 })
 
 interface KdaToolArgs {
@@ -97,6 +102,23 @@ export function apply(ctx: Context, config: Config = {}): void {
   const timeoutMs = config.timeoutMs ?? 300_000
   const outputMaxBytes = config.outputMaxBytes ?? 1_048_576
   const defaultMinimumImprovementPercent = config.defaultMinimumImprovementPercent ?? 0
+  const nsight = new NsightLauncher({
+    ...(config.ncuUiPath !== undefined ? { ncuUiPath: config.ncuUiPath } : {}),
+  })
+
+  ctx.commands.register({
+    name: 'kda-nsight',
+    description: 'Open durable KDA profiler evidence in NVIDIA Nsight Compute.',
+    input: { hint: 'internal KDA action payload' },
+    recordInput: false,
+    handler: async ({ rawInput, signal }) => {
+      try {
+        return { kind: 'success', text: describeNsightLaunch(await nsight.execute(parseNsightCommandInput(rawInput), signal)) }
+      } catch (error) {
+        return { kind: 'error', text: error instanceof Error ? error.message : String(error) }
+      }
+    },
+  })
 
   const skills = (ctx as Context & { skills: KdaSkillRegistry }).skills
   skills.register({

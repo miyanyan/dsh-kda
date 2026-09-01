@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { parseKdaResult, projectKdaRuns, type KdaResultView } from '../src/client/kda-projection.js'
-import { countRecoveredCandidates, summarizeRunOutcome } from '../src/client/kda-view.js'
+import { countRecoveredCandidates, mergedNsightReportForRun, summarizeRunOutcome } from '../src/client/kda-view.js'
 import { ncuAssessment } from './fixtures.js'
 
 const unverified = {
@@ -106,6 +106,8 @@ describe('KDA client projection', () => {
     expect(runs.map(run => run.runId)).toEqual(['run-b', 'run-a'])
     expect(runs[1]?.evaluations.map(item => item.result.candidate)).toEqual(['baseline', 'vector-load-v1'])
     expect(runs[1]?.lineage.map(item => item.candidate)).toEqual(['baseline', 'vector-load-v1'])
+    expect(runs[1]?.lineage.map(item => item.iteration)).toEqual([0, 1])
+    expect(runs[1]?.evaluations.map(item => item.result.iteration)).toEqual([0, 1])
     expect(runs[1]?.baseline?.candidate).toBe('baseline')
     expect(runs[1]?.bestPromoted?.candidate).toBe('vector-load-v1')
     expect(runs[1]?.fastestMeasured?.candidate).toBe('vector-load-v1')
@@ -274,6 +276,52 @@ describe('KDA client projection', () => {
     expect(projected?.ncuReportAssessment?.dimensions).toHaveLength(6)
     expect(projected?.ncuReportAssessment?.patterns[0]).toMatchObject({ id: 'E', estimatedSpeedupPercent: 18 })
     expect(projected?.ncuReportAssessment?.reportMarkdown).toContain('Key metrics')
+  })
+
+  it('selects the latest durable report already merged in the execution environment', () => {
+    const baseline = result({
+      workdir: 'D:\work',
+      profileContext: 'rtx5070ti-shape-a',
+      ncuReportAssessment: ncuAssessment({ mergedReportPath: 'profile/run-1-concat.ncu-rep' }),
+    })
+    const candidate = result({
+      evaluationId: 'eval-2',
+      iteration: 2,
+      candidate: 'vector-v2',
+      parentCandidate: 'baseline',
+      workdir: 'D:\work',
+      profileContext: 'rtx5070ti-shape-a',
+      ncuReportAssessment: ncuAssessment({ mergedReportPath: 'profile/run-2-concat.ncu-rep' }),
+      candidates: [
+        ...(baseline.candidates ?? []),
+        { candidate: 'vector-v2', parentCandidate: 'baseline', iteration: 2, hypothesis: 'Vectorize.', decision: 'promote' },
+      ],
+    })
+    const run = projectKdaRuns([node(baseline, 1), node(candidate, 2)])[0]!
+    expect(mergedNsightReportForRun(run)).toMatchObject({
+      report: {
+        candidate: 'vector-v2',
+        profileContext: 'rtx5070ti-shape-a',
+        reportPath: 'profile/run-2-concat.ncu-rep',
+      },
+    })
+  })
+
+  it('disables the run action until an execution-side merged report is recorded', () => {
+    const baseline = result({
+      workdir: 'D:\work', profileContext: 'gpu-a',
+      ncuReportAssessment: ncuAssessment({ fullReportPath: 'a.ncu-rep', mergedReportPath: undefined }),
+    })
+    const candidate = result({
+      evaluationId: 'eval-2', iteration: 2, candidate: 'candidate', parentCandidate: 'baseline', workdir: 'D:\work', profileContext: 'gpu-b',
+      ncuReportAssessment: ncuAssessment({ fullReportPath: 'b.ncu-rep', mergedReportPath: undefined }),
+      candidates: [
+        ...(baseline.candidates ?? []),
+        { candidate: 'candidate', parentCandidate: 'baseline', iteration: 2, hypothesis: 'Change.', decision: 'revise' },
+      ],
+    })
+    const merged = mergedNsightReportForRun(projectKdaRuns([node(baseline, 1), node(candidate, 2)])[0]!)
+    expect(merged.unavailableReason).toContain('Generate Concat in the benchmark/profile environment first')
   })
 
   it('degrades an incomplete schema-v1 result honestly and rejects every other schema', () => {

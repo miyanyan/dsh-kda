@@ -9,6 +9,7 @@ export function ncuAssessment(overrides: Partial<KdaNcuReportAssessment> = {}): 
     reportMarkdown: '# NCU Profiling Report\n\n## Executive summary\n\nThe kernel is latency-bound on dependent global loads.\n\n## Key metrics\n\n- Long scoreboard: 45%\n- DRAM throughput: 18%\n',
     fullReportPath: 'profile/run/reports/full.ncu-rep',
     sourceReportPath: 'profile/run/reports/source.ncu-rep',
+    mergedReportPath: 'profile/run/reports/run-concat.ncu-rep',
     analysisPath: 'profile/run/analysis',
     targetHardware: 'NVIDIA B200 / sm_100',
     targetKernel: 'vector_add',

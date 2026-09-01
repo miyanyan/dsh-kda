@@ -18,6 +18,8 @@ Rules:
 - Use `source="mit-han-lab/ncu-report-skill"` and `sourceCommit="1cf238d6b41c79bd35041192506c4d45e765a3f1"`.
 - Include each of the six dimensions exactly once. Use `missing-evidence` honestly; never omit a dimension.
 - Include the complete `REPORT.md` text in `reportMarkdown`. JSON-escape it verbatim; do not summarize or truncate it.
+- Set `mergedReportPath` to the run-level Concat report produced by the official Report Merge Tool in the benchmark/profile environment. Rebuild it after each profiled candidate from only the per-candidate full reports collected so far.
+- Make `mergedReportPath` resolve from the KDA `workdir` in the DSH viewer environment. If profiling runs in WSL or on a server, materialize only the final Concat report into that shared or local workspace before writing the sidecar.
 - Copy metric values, source locations, NCU rules, estimated speedups, and conclusions from durable report evidence.
 - Match only playbook Pattern `A`–`N`. Do not create a match without its signals, cause, first-line fix, and checked exceptions.
 - Rank recommendations by evidence and expected impact. Ranks are unique positive integers.
@@ -31,6 +33,7 @@ Rules:
   "reportMarkdown": "# NCU Profiling Report\\n\\n<complete REPORT.md content>",
   "fullReportPath": "profile/run/reports/full.ncu-rep",
   "sourceReportPath": "profile/run/reports/source.ncu-rep",
+  "mergedReportPath": "profile/run/merged/run-concat.ncu-rep",
   "analysisPath": "profile/run/analysis",
   "targetHardware": "NVIDIA B200 / sm_100",
   "targetKernel": "kernel_name",

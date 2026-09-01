@@ -160,6 +160,7 @@ export function parseNcuReportAssessmentJson(value: string | undefined): KdaNcuR
   if (new Set(recommendations.map(entry => entry.rank)).size !== recommendations.length) throw new Error('ncuReportAssessment.recommendations contains duplicate ranks')
   const fullReportPath = optionalString(item.fullReportPath, 'ncuReportAssessment.fullReportPath')
   const sourceReportPath = optionalString(item.sourceReportPath, 'ncuReportAssessment.sourceReportPath')
+  const mergedReportPath = optionalString(item.mergedReportPath, 'ncuReportAssessment.mergedReportPath')
   const analysisPath = optionalString(item.analysisPath, 'ncuReportAssessment.analysisPath')
   return {
     source: 'mit-han-lab/ncu-report-skill',
@@ -168,6 +169,7 @@ export function parseNcuReportAssessmentJson(value: string | undefined): KdaNcuR
     reportMarkdown: string(item.reportMarkdown, 'ncuReportAssessment.reportMarkdown'),
     ...(fullReportPath === undefined ? {} : { fullReportPath }),
     ...(sourceReportPath === undefined ? {} : { sourceReportPath }),
+    ...(mergedReportPath === undefined ? {} : { mergedReportPath }),
     ...(analysisPath === undefined ? {} : { analysisPath }),
     targetHardware: string(item.targetHardware, 'ncuReportAssessment.targetHardware'),
     targetKernel: string(item.targetKernel, 'ncuReportAssessment.targetKernel'),

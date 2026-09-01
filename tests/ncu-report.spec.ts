@@ -11,6 +11,7 @@ describe('original ncu-report-skill assessment', () => {
     expect(parsed?.patterns[0]).toMatchObject({ id: 'E', estimatedSpeedupPercent: 18 })
     expect(parsed?.recommendations[0]?.rank).toBe(1)
     expect(parsed?.reportMarkdown).toContain('NCU Profiling Report')
+    expect(parsed?.mergedReportPath).toBe('profile/run/reports/run-concat.ncu-rep')
   })
 
   it('rejects missing dimensions instead of inventing coverage', () => {

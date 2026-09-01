@@ -26,6 +26,7 @@ hypothesis -> candidate -> change -> correctness -> benchmark -> profile -> deci
 - Correctness-first evaluation using the project's existing commands
 - Benchmark comparisons against the baseline and previous candidates
 - NCU evidence attached to the candidate that produced it
+- Direct handoff of full/source reports and run comparisons to the official Nsight Compute tools
 - A dedicated KDA view that leaves Conversation and Trajectory intact
 
 The current result format is `schemaVersion: 1` and the package version is `0.0.1`. The package has
@@ -89,6 +90,8 @@ it from durable session history for later candidates.
 Start KDA before the first optimization. Record the baseline, then record every implemented
 candidate before making the next source change. KDA does not accept a bulk history supplied by the
 model; lineage is reconstructed only from durable prior evaluator results in the same session.
+Candidate numbering is zero-based: the baseline is candidate `0`, the first optimization is `1`,
+and names such as `v0`, `v1`, and `v2` can align directly with the number shown in the KDA ledger.
 
 <details>
 <summary>Baseline request</summary>
@@ -236,6 +239,12 @@ remain visible, but KDA does not use them for automatic causal comparison. Filte
 launch. Windows benchmark results and WSL2 profiles can coexist; the UI warns when profiler duration
 is not comparable to the promotion metric.
 
+For KDA runs, wrap the profiled launch in an NVTX range named exactly after the candidate and collect
+with `--nvtx`. The execution-side workflow uses NVIDIA's official Report Merge Tool `Concat`, so
+every candidate remains a separate result in the cumulative report. Show `property__range_name` in
+the official Summary page before sorting by a metric. KDA does not reimplement the Summary table,
+metric ordering, baselines, Raw page, Details page, or Source page.
+
 ## Inside the KDA view
 
 The conversation tab starts with the measured baseline, the best promoted candidate, and—when it
@@ -257,6 +266,18 @@ and contains:
 When an original NCU report is present, the ledger adds nodes for all six dimensions, playbook
 matches, NCU rules, and the ranked plan. A detail drawer contains the summary, every parsed metric,
 raw profiler output, and the complete embedded `REPORT.md`.
+
+Candidate actions open saved full or source `.ncu-rep` evidence directly when those files are
+available to the DSH host. The run action opens one cumulative Concat report recorded as
+`mergedReportPath`. Collection and NVIDIA's official Report Merge Tool run beside the benchmark;
+the viewer never stages or merges candidate reports. If `ncu-ui` is unavailable, KDA still returns
+the final artifact path. A missing or inaccessible merged report produces an explicit reason.
+
+This keeps remote use simple. WSL is treated like a local Linux execution server: write the final
+Concat report through the mounted project workspace (for example `/mnt/d/...`) so Windows DSH can
+open it. For a remote server, transfer only the final merged `.ncu-rep` into the local session
+workspace and record that relative path in the assessment sidecar. Per-candidate raw reports do not
+need to cross the environment boundary.
 
 Every completed candidate links to the original `kda_evaluate_candidate` Tool Call and to the same
 call in native Trajectory. Running candidates can also be opened in Trajectory. These links expose
@@ -292,6 +313,8 @@ Override the bundle row in the profile's `cordis.patch.yml`:
     timeoutMs: 600000
     outputMaxBytes: 2097152
     defaultMinimumImprovementPercent: 3
+    # Optional; omit this to auto-discover the newest Windows install or a PATH entry.
+    ncuUiPath: C:\Program Files\NVIDIA Corporation\Nsight Compute 2026.2.1\host\windows-desktop-win7-x64\ncu-ui.exe
 ```
 
 Patch configuration replaces the complete `config` object. Restate every value you want to retain.

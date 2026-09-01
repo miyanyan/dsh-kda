@@ -98,7 +98,9 @@ export function collectCandidateHistory(
       history.push(summary(result))
     }
   }
-  return history.sort((left, right) => left.iteration - right.iteration)
+  return history
+    .sort((left, right) => left.iteration - right.iteration)
+    .map((candidate, index) => ({ ...candidate, iteration: index }))
 }
 
 /** Reject ambiguous lineage before executing commands. */

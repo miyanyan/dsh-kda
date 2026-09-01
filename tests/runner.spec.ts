@@ -84,6 +84,7 @@ describe('evaluateCandidate', () => {
   it('records the first measured candidate as the explicit baseline', async () => {
     const output = await measuredBaseline()
     expect(output.schemaVersion).toBe(1)
+    expect(output.iteration).toBe(0)
     expect(output.decision).toBe('baseline')
     expect(output.baselineMetric).toBe(10)
     expect(output.candidateMetric).toBe(10)
@@ -245,7 +246,7 @@ describe('evaluateCandidate', () => {
       correctness: result('ok'),
       benchmark: result('KDA_METRIC=8'),
     }))
-    expect(output.iteration).toBe(2)
+    expect(output.iteration).toBe(1)
     expect(output.candidates.map(candidate => candidate.candidate)).toEqual(['baseline', 'vectorized-load-v1'])
     expect(output.trajectory.some(event => event.type === 'kda/run-started')).toBe(false)
   })

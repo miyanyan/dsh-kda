@@ -23,8 +23,20 @@ import {
 export interface KdaViewNavigation {
   openCall: (callId: string, seq: number) => void
   inspectCall: (callId: string) => void
+  launchNsight: (request: KdaNsightRequest) => Promise<string>
   loadOlder: () => Promise<void>
 }
+
+export interface KdaNsightReportReference {
+  candidate: string
+  iteration?: number
+  workdir: string
+  reportPath: string
+  profileContext?: string
+}
+
+export type KdaNsightRequest =
+  { action: 'open-report'; report: KdaNsightReportReference }
 
 const color = {
   baseline: '#2563eb',
@@ -290,12 +302,15 @@ function NcuMetricTable({ metrics }: { metrics: readonly KdaMetricView[] }) {
   )
 }
 
-function NcuReportDrawer({ assessment, candidate, profile, profileStage, onClose }: {
+function NcuReportDrawer({ assessment, candidate, profile, profileStage, onClose, onOpenFull, onOpenSource, openingPath }: {
   assessment: KdaNcuReportAssessmentView
   candidate: string
   profile?: KdaProfileView | undefined
   profileStage?: KdaStageView | undefined
   onClose: () => void
+  onOpenFull?: (() => void) | undefined
+  onOpenSource?: (() => void) | undefined
+  openingPath?: string | undefined
 }) {
   const [tab, setTab] = useState<NcuDrawerTab>('summary')
   useEffect(() => {
@@ -321,6 +336,8 @@ function NcuReportDrawer({ assessment, candidate, profile, profileStage, onClose
               <strong style={{ display: 'block', fontSize: 16, marginTop: 8 }}>{assessment.targetKernel}</strong>
               <span style={{ display: 'block', fontSize: 11, marginTop: 3, opacity: 0.56 }}>{candidate} · {assessment.targetHardware} · {assessed}/6 assessed</span>
             </span>
+            {onOpenFull !== undefined && <ActionButton disabled={openingPath !== undefined} onClick={onOpenFull}>{openingPath === assessment.fullReportPath ? 'Opening…' : 'Open in Nsight Compute'}</ActionButton>}
+            {onOpenSource !== undefined && <ActionButton disabled={openingPath !== undefined} onClick={onOpenSource}>{openingPath === assessment.sourceReportPath ? 'Opening source…' : 'Open source capture'}</ActionButton>}
             <button aria-label="Close NCU report" onClick={onClose} style={{ background: 'transparent', border, borderRadius: 6, color: 'inherit', cursor: 'pointer', fontSize: 18, height: 30, marginLeft: 'auto', width: 32 }} type="button">×</button>
           </div>
           <nav aria-label="NCU report sections" role="tablist" style={{ display: 'flex', gap: 2, marginTop: 13, overflowX: 'auto' }}>
@@ -345,6 +362,7 @@ function NcuReportDrawer({ assessment, candidate, profile, profileStage, onClose
                 <div><strong>REPORT.md</strong> · <code>{assessment.reportPath}</code></div>
                 {assessment.fullReportPath !== undefined && <div><strong>Full profile</strong> · <code>{assessment.fullReportPath}</code></div>}
                 {assessment.sourceReportPath !== undefined && <div><strong>Source profile</strong> · <code>{assessment.sourceReportPath}</code></div>}
+                {assessment.mergedReportPath !== undefined && <div><strong>Merged run</strong> · <code>{assessment.mergedReportPath}</code></div>}
                 {assessment.analysisPath !== undefined && <div><strong>Analysis</strong> · <code>{assessment.analysisPath}</code></div>}
                 <div><strong>Skill</strong> · <code>{assessment.source}@{assessment.sourceCommit}</code></div>
               </section>
@@ -458,6 +476,7 @@ function NcuReportNodes({ assessment, latest, onOpenReport }: { assessment: KdaN
           <div><strong>REPORT.md</strong> · <code>{assessment.reportPath}</code></div>
           {assessment.fullReportPath !== undefined && <div><strong>Full profile</strong> · <code>{assessment.fullReportPath}</code></div>}
           {assessment.sourceReportPath !== undefined && <div><strong>Source profile</strong> · <code>{assessment.sourceReportPath}</code></div>}
+          {assessment.mergedReportPath !== undefined && <div><strong>Merged run</strong> · <code>{assessment.mergedReportPath}</code></div>}
           {assessment.analysisPath !== undefined && <div><strong>Analysis</strong> · <code>{assessment.analysisPath}</code></div>}
           <div><strong>Skill source</strong> · <code>{assessment.source}@{assessment.sourceCommit.slice(0, 8)}</code></div>
           <div><strong>Coverage</strong> · {analyzed} analyzed{notApplicable === 0 ? '' : ` · ${notApplicable} not applicable`} · {6 - assessed} missing evidence</div>
@@ -561,8 +580,22 @@ function NcuReportNodes({ assessment, latest, onOpenReport }: { assessment: KdaN
   )
 }
 
+function nsightReportReference(result: KdaEvaluationView['result'], reportPath: string | undefined): KdaNsightReportReference | undefined {
+  if (reportPath === undefined || result.workdir === undefined || !reportPath.toLowerCase().endsWith('.ncu-rep')) return undefined
+  return {
+    candidate: result.candidate,
+    ...(result.iteration !== undefined ? { iteration: result.iteration } : {}),
+    workdir: result.workdir,
+    reportPath,
+    ...(result.profileContext !== undefined ? { profileContext: result.profileContext } : {}),
+  }
+}
+
 function CandidateLedger({ embedded = false, evaluation, latest, navigation, onOpenRawEvaluation }: { embedded?: boolean; evaluation: KdaEvaluationView; latest: boolean; navigation: KdaViewNavigation; onOpenRawEvaluation: () => void }) {
   const [reportOpen, setReportOpen] = useState(false)
+  const [openingPath, setOpeningPath] = useState<string>()
+  const [nsightMessage, setNsightMessage] = useState<string>()
+  const [nsightError, setNsightError] = useState<string>()
   const result = evaluation.result
   const correctness = result.stages.find(stage => stage.stage === 'correctness')
   const benchmark = result.stages.find(stage => stage.stage === 'benchmark')
@@ -571,6 +604,8 @@ function CandidateLedger({ embedded = false, evaluation, latest, navigation, onO
   const comparison = profile?.comparison
   const mechanism = result.mechanismAssessment
   const ncuReport = result.ncuReportAssessment
+  const fullReport = nsightReportReference(result, ncuReport?.fullReportPath)
+  const sourceReport = nsightReportReference(result, ncuReport?.sourceReportPath)
   const assessedDimensions = ncuReport?.dimensions.filter(item => item.status !== 'missing-evidence').length
   const expectation = mechanism.expectedMetric === undefined
     ? 'no metric declared'
@@ -578,6 +613,19 @@ function CandidateLedger({ embedded = false, evaluation, latest, navigation, onO
   const ncuPolicy = result.promotionPolicy === undefined
     ? 'policy not recorded'
     : result.promotionPolicy.requireMechanism || result.promotionPolicy.requireProfile ? 'NCU is blocking' : 'NCU is advisory'
+
+  const openNsightReport = async (report: KdaNsightReportReference): Promise<void> => {
+    setOpeningPath(report.reportPath)
+    setNsightMessage(undefined)
+    setNsightError(undefined)
+    try {
+      setNsightMessage(await navigation.launchNsight({ action: 'open-report', report }))
+    } catch (error) {
+      setNsightError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setOpeningPath(undefined)
+    }
+  }
 
   return (
     <>
@@ -607,8 +655,11 @@ function CandidateLedger({ embedded = false, evaluation, latest, navigation, onO
             {ncuReport === undefined
               ? <span style={{ color: color.revise, fontSize: 10, padding: '6px 0' }}>NCU report unavailable</span>
               : <PrimaryActionButton onClick={() => setReportOpen(true)}>View NCU report</PrimaryActionButton>}
+            {fullReport !== undefined && <ActionButton disabled={openingPath !== undefined} onClick={() => { void openNsightReport(fullReport) }}>{openingPath === fullReport.reportPath ? 'Opening Nsight Compute…' : 'Open in Nsight Compute'}</ActionButton>}
             <ActionButton onClick={() => navigation.inspectCall(evaluation.callId)}>Open in Trajectory</ActionButton>
           </div>
+          {nsightMessage !== undefined && <div role="status" style={{ color: color.promote, fontSize: 10, gridColumn: '1 / -1' }}>{nsightMessage}</div>}
+          {nsightError !== undefined && <div role="alert" style={{ color: color.reject, fontSize: 10, gridColumn: '1 / -1' }}>{nsightError}</div>}
         </div>
         <details style={{ borderTop: subtleBorder }} data-kda-evidence="true">
           <summary style={{ cursor: 'pointer', fontSize: 11, fontWeight: 700, listStyle: 'none', padding: '8px 0' }}>Inspect full evidence · {result.stages.length} stages</summary>
@@ -725,7 +776,16 @@ function CandidateLedger({ embedded = false, evaluation, latest, navigation, onO
         </details>
       </div>
     </details>
-    {reportOpen && ncuReport !== undefined && <NcuReportDrawer assessment={ncuReport} candidate={result.candidate} onClose={() => setReportOpen(false)} profile={profile} profileStage={profileStage} />}
+    {reportOpen && ncuReport !== undefined && <NcuReportDrawer
+      assessment={ncuReport}
+      candidate={result.candidate}
+      onClose={() => setReportOpen(false)}
+      onOpenFull={fullReport === undefined ? undefined : () => { void openNsightReport(fullReport) }}
+      onOpenSource={sourceReport === undefined ? undefined : () => { void openNsightReport(sourceReport) }}
+      openingPath={openingPath}
+      profile={profile}
+      profileStage={profileStage}
+    />}
     </>
   )
 }
@@ -892,10 +952,42 @@ function OutcomeSummary({ run }: { run: KdaRunView }) {
   )
 }
 
+export interface KdaMergedNsightReport {
+  report?: KdaNsightReportReference
+  unavailableReason?: string
+}
+
+/** Select the latest Concat artifact already produced in the benchmark/profile environment. */
+export function mergedNsightReportForRun(run: KdaRunView): KdaMergedNsightReport {
+  for (const evaluation of [...run.evaluations].reverse()) {
+    const report = nsightReportReference(evaluation.result, evaluation.result.ncuReportAssessment?.mergedReportPath)
+    if (report !== undefined) return { report }
+  }
+  return { unavailableReason: 'No merged NCU report was recorded. Generate Concat in the benchmark/profile environment first.' }
+}
+
 function RunLedger({ run, latest, navigation }: { run: KdaRunView; latest: boolean; navigation: KdaViewNavigation }) {
   const [selectedEvaluation, setSelectedEvaluation] = useState<KdaEvaluationView>()
+  const [openingMerged, setOpeningMerged] = useState(false)
+  const [mergedMessage, setMergedMessage] = useState<string>()
+  const [mergedError, setMergedError] = useState<string>()
   const best = run.bestPromoted
   const latestResult = run.evaluations.at(-1)?.result
+  const merged = mergedNsightReportForRun(run)
+
+  const openMergedInNsight = async (): Promise<void> => {
+    if (merged.report === undefined) return
+    setOpeningMerged(true)
+    setMergedMessage(undefined)
+    setMergedError(undefined)
+    try {
+      setMergedMessage(await navigation.launchNsight({ action: 'open-report', report: merged.report }))
+    } catch (error) {
+      setMergedError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setOpeningMerged(false)
+    }
+  }
   return (
     <>
       <details open={latest} style={{ border, borderRadius: 7, overflow: 'hidden' }} data-kda-run={run.runId}>
@@ -906,14 +998,24 @@ function RunLedger({ run, latest, navigation }: { run: KdaRunView; latest: boole
           </span>
           <span style={{ fontSize: 11 }}>Best <strong>{metricText(best?.candidateMetric, best?.metricUnit)}</strong></span>
           <ResultText tone={best?.improvementPercent === undefined ? undefined : best.improvementPercent >= 0 ? color.promote : color.reject}>{percentText(best?.improvementPercent)}</ResultText>
-          <Tag>{run.lineage.length} iterations</Tag>
+          <Tag>{run.lineage.length} candidates</Tag>
           {run.runningCandidates.length > 0
             ? <Tag tone={color.benchmark}>{run.runningCandidates.length} running</Tag>
             : <Tag tone={latestResult?.ncuReportAssessment === undefined ? color.revise : color.promote}>{latestResult?.ncuReportAssessment === undefined ? 'NO NCU' : `${latestResult.ncuReportAssessment.dimensions.filter(item => item.status !== 'missing-evidence').length}/6 NCU`}</Tag>}
         </summary>
         <OutcomeSummary run={run} />
+        <div style={{ alignItems: 'center', borderBottom: border, display: 'flex', flexWrap: 'wrap', gap: 8, padding: '7px 12px' }} data-kda-nsight-merged="true">
+          <ActionButton disabled={openingMerged || merged.report === undefined} onClick={() => { void openMergedInNsight() }}>
+            {openingMerged ? 'Opening merged report…' : 'Open merged NCU report'}
+          </ActionButton>
+          <span style={{ fontSize: 10, opacity: 0.58 }}>
+            {merged.unavailableReason ?? `Concat produced in execution environment · ${merged.report?.profileContext ?? 'profile context not recorded'}`}
+          </span>
+          {mergedMessage !== undefined && <span role="status" style={{ color: color.promote, flexBasis: '100%', fontSize: 10 }}>{mergedMessage}</span>}
+          {mergedError !== undefined && <span role="alert" style={{ color: color.reject, flexBasis: '100%', fontSize: 10 }}>{mergedError}</span>}
+        </div>
         {run.objective !== undefined && <details style={{ borderBottom: border, fontSize: 10 }}><summary style={{ cursor: 'pointer', listStyle: 'none', opacity: 0.55, padding: '6px 12px' }}>Run contract</summary><div style={{ padding: '0 12px 8px' }}>{run.objective}</div></details>}
-        <section aria-label="Optimization iterations" data-kda-iterations="true" style={{ overflowX: 'auto' }}>
+        <section aria-label="Optimization candidates" data-kda-candidates="true" style={{ overflowX: 'auto' }}>
           <div style={{ minWidth: 690 }}>
             <div style={{ alignItems: 'center', display: 'grid', fontSize: 9, fontWeight: 750, gap: 10, gridTemplateColumns: iterationColumns, letterSpacing: '0.05em', minHeight: 30, opacity: 0.45, padding: '0 12px', textTransform: 'uppercase' }}>
               <span>#</span><span>Candidate</span><span>Metric</span><span>vs baseline</span><span>NCU</span><span>Verdict</span>
@@ -934,7 +1036,7 @@ function RunLedger({ run, latest, navigation }: { run: KdaRunView; latest: boole
 }
 
 /** Trajectory-style KDA semantic ledger reconstructed from ordinary durable tool results. */
-export function KdaView({ useSession, openCall, inspectCall, loadOlder }: ConvViewProps & KdaViewNavigation) {
+export function KdaView({ useSession, openCall, inspectCall, launchNsight, loadOlder }: ConvViewProps & KdaViewNavigation) {
   let nodes: readonly unknown[] = []
   let runningCalls: readonly unknown[] = []
   let hasMore = false
@@ -955,7 +1057,7 @@ export function KdaView({ useSession, openCall, inspectCall, loadOlder }: ConvVi
   const recoveredCount = countRecoveredCandidates(runs)
   const [loadError, setLoadError] = useState<string>()
   const [requestingOlder, setRequestingOlder] = useState(false)
-  const navigation = useMemo(() => ({ openCall, inspectCall, loadOlder }), [openCall, inspectCall, loadOlder])
+  const navigation = useMemo(() => ({ openCall, inspectCall, launchNsight, loadOlder }), [openCall, inspectCall, launchNsight, loadOlder])
 
   const requestEarlierEvidence = async () => {
     setRequestingOlder(true)

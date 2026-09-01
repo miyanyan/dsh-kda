@@ -66,6 +66,7 @@ export interface KdaNcuReportAssessmentView {
   reportMarkdown: string
   fullReportPath?: string
   sourceReportPath?: string
+  mergedReportPath?: string
   analysisPath?: string
   targetHardware: string
   targetKernel: string
@@ -120,6 +121,7 @@ export interface KdaCandidateView {
   candidate: string
   candidateRole?: 'baseline' | 'experiment'
   parentCandidate?: string
+  /** Zero-based candidate index: the measured baseline is 0. */
   iteration: number
   hypothesis: string
   changeSummary?: string
@@ -384,13 +386,15 @@ function candidates(value: unknown): KdaCandidateView[] {
     .map((item, index) => ({
       ...item as unknown as KdaCandidateView,
       candidate: item.candidate as string,
-      candidateRole: item.candidateRole === 'baseline' ? 'baseline' : 'experiment',
-      iteration: typeof item.iteration === 'number' ? item.iteration : index + 1,
+      candidateRole: item.candidateRole === 'baseline' ? 'baseline' as const : 'experiment' as const,
+      iteration: typeof item.iteration === 'number' ? item.iteration : index,
       hypothesis: typeof item.hypothesis === 'string' ? item.hypothesis : 'No hypothesis recorded',
       decision: item.decision as KdaDecisionView,
       ...(isProfileStatus(item.profileStatus) ? { profileStatus: item.profileStatus } : {}),
       ...(isMechanismVerdict(item.mechanismVerdict) ? { mechanismVerdict: item.mechanismVerdict } : {}),
     }))
+    .sort((left, right) => left.iteration - right.iteration)
+    .map((candidate, index) => ({ ...candidate, iteration: index }))
 }
 
 function decisionGates(value: unknown): KdaDecisionGateView[] {
@@ -486,6 +490,7 @@ function ncuReportAssessment(value: unknown): KdaNcuReportAssessmentView | undef
     reportMarkdown: value.reportMarkdown,
     ...(typeof value.fullReportPath === 'string' ? { fullReportPath: value.fullReportPath } : {}),
     ...(typeof value.sourceReportPath === 'string' ? { sourceReportPath: value.sourceReportPath } : {}),
+    ...(typeof value.mergedReportPath === 'string' ? { mergedReportPath: value.mergedReportPath } : {}),
     ...(typeof value.analysisPath === 'string' ? { analysisPath: value.analysisPath } : {}),
     targetHardware: value.targetHardware,
     targetKernel: value.targetKernel,
@@ -516,12 +521,17 @@ function validResult(value: unknown): KdaResultView | undefined {
   const { profileAnalysis: _profileAnalysis, ...base } = value
   const rawPolicy = isObject(value.promotionPolicy) ? value.promotionPolicy : undefined
   const normalizedNcuReport = ncuReportAssessment(value.ncuReportAssessment)
+  const normalizedCandidates = candidates(value.candidates)
+  const candidateIndex = normalizedCandidates.findIndex(candidate =>
+    (typeof value.evaluationId === 'string' && candidate.evaluationId === value.evaluationId)
+    || candidate.candidate === value.candidate)
   return {
     ...base as unknown as KdaResultView,
     candidateRole: value.candidateRole === 'baseline' ? 'baseline' : 'experiment',
     reason: typeof value.reason === 'string' ? value.reason : 'Evaluation result is incomplete.',
     stages: stages(value.stages),
-    candidates: candidates(value.candidates),
+    candidates: normalizedCandidates,
+    ...(candidateIndex < 0 ? {} : { iteration: candidateIndex }),
     profileStatus,
     mechanismAssessment: assessment,
     ...(normalizedNcuReport === undefined ? {} : { ncuReportAssessment: normalizedNcuReport }),
@@ -581,7 +591,7 @@ function fallbackCandidate(evaluation: KdaEvaluationView, index: number): KdaCan
     candidate: result.candidate,
     candidateRole: result.candidateRole,
     ...(result.parentCandidate !== undefined ? { parentCandidate: result.parentCandidate } : {}),
-    iteration: result.iteration ?? index + 1,
+    iteration: result.iteration ?? index,
     hypothesis: result.hypothesis ?? 'No hypothesis recorded',
     ...(result.changeSummary !== undefined ? { changeSummary: result.changeSummary } : {}),
     ...(result.sourceRevision !== undefined ? { sourceRevision: result.sourceRevision } : {}),

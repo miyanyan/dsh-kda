@@ -43,7 +43,7 @@ describe('collectCandidateHistory', () => {
     const history = collectCandidateHistory(events, 'run-a')
     expect(history).toHaveLength(1)
     expect(history[0]).toMatchObject({
-      candidate: 'baseline', candidateRole: 'baseline', hypothesis: 'measure the reference',
+      candidate: 'baseline', candidateRole: 'baseline', iteration: 0, hypothesis: 'measure the reference',
       candidateMetric: 10, benchmarkContext: 'rtx5070ti-shape-a', lowerIsBetter: true,
     })
   })
