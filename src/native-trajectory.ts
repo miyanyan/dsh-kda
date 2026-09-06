@@ -1,8 +1,8 @@
-import type { CodeDispatchEventData, CodeDispatchStartEventData, ToolRunContext } from '@deepseek-ai/dsh-tools'
+import type { PtcDispatchEventData, PtcDispatchStartEventData, ToolRunContext } from '@deepseek-ai/dsh-tools'
 import type { KdaTrajectoryEvent } from './types.js'
 
 interface NativeCall {
-  start: CodeDispatchStartEventData
+  start: PtcDispatchStartEventData
 }
 
 function eventArguments(event: KdaTrajectoryEvent): Record<string, unknown> {
@@ -171,9 +171,9 @@ export class KdaNativeTrajectoryRecorder {
   }
 
   private start(name: string, args: Record<string, unknown>, parentCallId = this.candidateCall?.start.subCallId ?? this.parentCallId): NativeCall {
-    const subCallId = `${String(this.parentCallId)}:kda:${this.nextId}` as CodeDispatchStartEventData['subCallId']
+    const subCallId = `${String(this.parentCallId)}:kda:${this.nextId}` as PtcDispatchStartEventData['subCallId']
     this.nextId += 1
-    const start: CodeDispatchStartEventData = {
+    const start: PtcDispatchStartEventData = {
       rootCallId: this.rootCallId,
       parentCallId,
       subCallId,
@@ -185,7 +185,7 @@ export class KdaNativeTrajectoryRecorder {
   }
 
   private finish(call: NativeCall, result: Record<string, unknown>, isError: boolean): void {
-    const settled: CodeDispatchEventData = {
+    const settled: PtcDispatchEventData = {
       ...call.start,
       isError,
       content: [{ type: 'text', text: JSON.stringify(result) }],

@@ -1,6 +1,8 @@
 import * as React from 'react'
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
+import type {} from '@deepseek-ai/dsh-client-ui-chat/client'
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type { UseSession } from '@deepseek-ai/dsh-client-ui-session/client'
 import {
   projectKdaRuns,
   type KdaCandidateView,
@@ -26,6 +28,9 @@ export interface KdaViewNavigation {
   launchNsight: (request: KdaNsightRequest) => Promise<string>
   loadOlder: () => Promise<void>
 }
+
+type KdaViewInjectedNavigation = Pick<KdaViewNavigation, 'launchNsight' | 'loadOlder'>
+type KdaViewProps = ConvViewProps & KdaViewInjectedNavigation & { useSession: UseSession }
 
 export interface KdaNsightReportReference {
   candidate: string
@@ -1036,20 +1041,12 @@ function RunLedger({ run, latest, navigation }: { run: KdaRunView; latest: boole
 }
 
 /** Trajectory-style KDA semantic ledger reconstructed from ordinary durable tool results. */
-export function KdaView({ useSession, openCall, inspectCall, launchNsight, loadOlder }: ConvViewProps & KdaViewNavigation) {
-  let nodes: readonly unknown[] = []
-  let runningCalls: readonly unknown[] = []
-  let hasMore = false
-  let loadingOlder = false
-  try {
-    const snapshot = useSession(value => value)
-    nodes = snapshot?.nodes ?? []
-    runningCalls = snapshot?.runningCalls ?? []
-    hasMore = snapshot?.hasMore ?? false
-    loadingOlder = snapshot?.loadingOlder ?? false
-  } catch {
-    // A newly selected view may render once before its Session snapshot is ready.
-  }
+export function KdaView({ useSession, useConversation, openView, launchNsight, loadOlder }: KdaViewProps) {
+  const legacy = useConversation(value => value.views.get('chat')?.legacy)
+  const nodes: readonly unknown[] = legacy?.nodes ?? []
+  const runningCalls: readonly unknown[] = legacy?.runningCalls ?? []
+  const hasMore = useSession(value => value.hasMore)
+  const loadingOlder = useSession(value => value.loadingOlder)
   const runs = useMemo(() => projectKdaRuns(nodes, runningCalls), [nodes, runningCalls])
   const candidateCount = runs.reduce((sum, run) => sum + run.lineageRows.length, 0)
   const promotedCount = runs.reduce((sum, run) => sum + run.lineage.filter(candidate => candidate.decision === 'promote').length, 0)
@@ -1057,7 +1054,12 @@ export function KdaView({ useSession, openCall, inspectCall, launchNsight, loadO
   const recoveredCount = countRecoveredCandidates(runs)
   const [loadError, setLoadError] = useState<string>()
   const [requestingOlder, setRequestingOlder] = useState(false)
-  const navigation = useMemo(() => ({ openCall, inspectCall, launchNsight, loadOlder }), [openCall, inspectCall, launchNsight, loadOlder])
+  const navigation = useMemo<KdaViewNavigation>(() => ({
+    openCall: callId => openView('trajectory', callId),
+    inspectCall: callId => openView('trajectory', callId),
+    launchNsight,
+    loadOlder,
+  }), [launchNsight, loadOlder, openView])
 
   const requestEarlierEvidence = async () => {
     setRequestingOlder(true)

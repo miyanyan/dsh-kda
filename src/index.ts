@@ -14,6 +14,8 @@ import { describeNsightLaunch, NsightLauncher, parseNsightCommandInput } from '.
 import { evaluateCandidate } from './runner.js'
 import type { KdaCommandResult, KdaEvaluationRequest, KdaNcuReportAssessment, KdaStageName } from './types.js'
 
+type KdaJsonValue = null | boolean | number | string | KdaJsonValue[] | { [key: string]: KdaJsonValue }
+
 export const name = 'kda'
 export const inject = ['tools', 'shell', 'skills', 'sandboxPolicy', 'commands']
 
@@ -184,7 +186,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       render: (_args, value) => [{ type: 'text', text: value }],
       presentationMeta: (_args, value) => {
         try {
-          return JSON.parse(value) as Record<string, unknown>
+          return JSON.parse(value) as KdaJsonValue
         } catch {
           return null
         }

@@ -2,9 +2,11 @@ import * as React from 'react'
 import { useState, type CSSProperties } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
-import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import type { ChatStore } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type {} from '@deepseek-ai/dsh-api-session-controller/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+import type {} from '@deepseek-ai/dsh-client-ui-session/client'
+import type { ToolCallViewProps } from '@deepseek-ai/dsh-client-ui-tool/client'
 import { KdaView, type KdaNsightRequest } from './kda-view.js'
 import {
   parseKdaResult,
@@ -20,21 +22,6 @@ export interface KdaTextBlock {
 export type KdaToolBlock =
   | { argsRaw: string }
   | { kind: 'tool-result'; content: readonly KdaTextBlock[]; meta?: unknown; isError?: boolean }
-
-interface KdaToolCallOwnerProps {
-  callId: string
-  toolName: string
-  block: KdaToolBlock
-  inspect?: () => void
-}
-
-declare module '@deepseek-ai/dsh-client-ui-slots' {
-  interface SlotMap {
-    'tool.call.toolview': { kind: 'keyed'; scope: 'session'; owner: KdaToolCallOwnerProps }
-  }
-}
-
-type ToolCallViewProps = PropsRuntime<'tool.call.toolview'>
 
 const color = {
   baseline: '#2563eb',
@@ -192,25 +179,12 @@ export function apply(ctx: Context): void {
     { name: 'tool.call.toolview', key: 'kda_evaluate_candidate' },
     KdaToolRow,
   ))
-  ctx.slots.inject('conversation.view', () => {
-    const chatEntry = ctx.slots.entriesOfSlot('conversation.view').find(entry => entry.options.id === 'chat')
-    const chatStore = chatEntry?.store as ChatStore | undefined
-    if (chatStore === undefined) throw new Error('dsh-kda requires the standard Chat conversation view store')
-    return ctx.slots.register({
+  ctx.slots.inject('conversation.view', () => ctx.slots.register({
       name: 'conversation.view',
       id: 'kda',
       order: 30,
       label: () => 'KDA',
-      store: chatStore,
-      inject: (sessionId, actions) => ({
-        openCall: (callId: string, seq: number) => {
-          actions.select({ turnSeq: seq, callId, toolName: 'kda_evaluate_candidate' })
-          ctx.layout.openDetails()
-        },
-        inspectCall: (callId: string) => {
-          actions.setInspect({ callId })
-          actions.setView('trajectory')
-        },
+      inject: sessionId => ({
         launchNsight: async (request: KdaNsightRequest) => {
           const line = `/kda-nsight ${encodeURIComponent(JSON.stringify(request))}`
           const response = await ctx.remote.commands.execute(sessionId, line, [])
@@ -220,14 +194,12 @@ export function apply(ctx: Context): void {
           return response.value.result.text ?? 'NVIDIA Nsight Compute started.'
         },
         loadOlder: async () => {
-          const scoped = ctx.sessions.scope(sessionId)
-          const conversation = scoped?.get('conversation')
-          if (conversation === undefined) throw new Error(`dsh-kda could not resolve conversation history for session "${sessionId}"`)
-          await conversation.loadOlder()
+          const binding = ctx.sessions.binding(sessionId)
+          if (binding === undefined) throw new Error(`dsh-kda could not resolve conversation history for session "${sessionId}"`)
+          await binding.session.loadOlder()
         },
       }),
     },
     KdaView,
-    )
-  })
+  ))
 }
